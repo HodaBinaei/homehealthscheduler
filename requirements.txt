@@ -1,0 +1,65 @@
+absl-py==2.4.0
+annotated-types==0.7.0
+Bottleneck @ file:///home/task_176193794916414/conda-bld/bottleneck_1761937997056/work
+branca==0.8.2
+certifi==2026.1.4
+charset-normalizer==3.4.4
+contourpy @ file:///home/task_176364358398678/conda-bld/contourpy_1763643923238/work
+cycler @ file:///home/task_176606792107398/croot/cycler_1766067942240/work
+dotenv==0.9.9
+duckdb==1.5.5
+et_xmlfile==2.0.0
+folium==0.20.0
+fonttools @ file:///home/task_176544510900877/conda-bld/fonttools_1765445131140/work
+geographiclib==2.1
+geopy==2.4.1
+greenlet==3.3.1
+idna==3.11
+ijson==3.5.1
+immutabledict==4.3.1
+Jinja2==3.1.6
+joblib==1.5.3
+kiwisolver @ file:///home/task_176415927184728/conda-bld/kiwisolver_1764159298260/work
+MarkupSafe==3.0.3
+matplotlib==3.10.8
+mkl-service==2.5.2
+mkl_fft @ file:///home/task_176159252635933/conda-bld/mkl_fft_1761592902019/work
+mkl_random @ file:///home/task_176159299715632/conda-bld/mkl_random_1761593011445/work
+numexpr @ file:///home/task_176216555051259/conda-bld/numexpr_1762165561927/work
+numpy @ file:///home/task_176837629834819/croot/numpy_and_numpy_base_1768376364810/work/dist/numpy-2.4.1-cp312-cp312-linux_x86_64.whl#sha256=c200e5c0500516250a0e939fe508f0804d198793988494da785585c798b01716
+openpyxl==3.1.5
+openrouteservice==2.3.3
+ortools==9.14.6206
+packaging @ file:///home/task_176104874243446/conda-bld/packaging_1761049080023/work
+pandas @ file:///home/task_177064302163091/croot/pandas_1770643076374/work
+pandasql==0.7.3
+patsy==1.0.2
+pillow @ file:///home/task_176943332450529/croot/pillow_1769433366316/work
+protobuf==6.31.1
+psycopg2-binary==2.9.11
+pydantic==2.12.5
+pydantic_core==2.41.5
+pyomo==6.10.0
+pyparsing @ file:///home/task_176397389694487/conda-bld/pyparsing_1763973908808/work
+PyQt6==6.9.1
+PyQt6_sip @ file:///home/task_175751008914507/conda-bld/pyqt-split_1757511022708/work/pyqt_sip
+python-dateutil @ file:///croot/python-dateutil_1716495738603/work
+python-dotenv==1.2.1
+pytz @ file:///croot/pytz_1752135852232/work
+PyYAML==6.0.3
+requests==2.32.5
+scikit-learn==1.8.0
+scipy==1.17.0
+setuptools==80.10.2
+sip @ file:///croot/sip_1756223371714/work
+six @ file:///croot/six_1744271502820/work
+SQLAlchemy==2.0.46
+statsmodels==0.14.6
+threadpoolctl==3.6.0
+tornado @ file:///home/task_176599247062576/croot/tornado_1765992645217/work
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+tzdata @ file:///home/task_176829656558347/croot/python-tzdata_1768296637279/work
+urllib3==2.6.3
+wheel==0.46.3
+xyzservices==2025.11.0

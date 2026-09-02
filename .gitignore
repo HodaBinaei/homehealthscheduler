@@ -1,0 +1,38 @@
+# Deny everything by default
+*
+# Allow directory traversal
+!*/
+
+# Allow code and project files only
+!*.py
+!*.md
+!*.sh
+!*.toml
+!*.cfg
+!requirements.txt
+!.gitignore
+
+# Re-deny data formats even if allowed above
+*.csv
+*.xlsx
+*.xls
+*.pkl
+*.zip
+*.db
+*.sqlite*
+*.json
+.env
+*.key
+credentials*
+
+# Deny data/output directories outright
+data/
+data_today/
+output/
+today/
+__pycache__/
+*.pyc
+.venv/
+venv/
+myenv/
+.ipynb_checkpoints/
