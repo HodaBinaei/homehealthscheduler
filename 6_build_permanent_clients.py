@@ -6,7 +6,11 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 import os
 
-PROJECT_ROOT = '/home/hoda/Desktop/homehealthscheduler_local_pipeline'
+import os
+PROJECT_ROOT = os.environ.get(
+    'HHS_PROJECT_ROOT',
+    os.path.dirname(os.path.abspath(__file__)),
+)
 os.makedirs('./output', exist_ok=True)
 
 with open(f'{PROJECT_ROOT}/roster_data.pkl', 'rb') as f:

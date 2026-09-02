@@ -2,7 +2,11 @@ import csv, sys, json
 from collections import defaultdict
 from datetime import datetime
 
-PROJECT_ROOT = '/home/hoda/Desktop/homehealthscheduler_local_pipeline'
+import os
+PROJECT_ROOT = os.environ.get(
+    'HHS_PROJECT_ROOT',
+    os.path.dirname(os.path.abspath(__file__)),
+)
 
 csv.field_size_limit(sys.maxsize)
 

@@ -9,7 +9,11 @@ that includes it, not just patients.json/caregivers.json).
 """
 import json, os
 
-PROJECT_ROOT = '/home/hoda/Desktop/homehealthscheduler_local_pipeline'
+import os
+PROJECT_ROOT = os.environ.get(
+    'HHS_PROJECT_ROOT',
+    os.path.dirname(os.path.abspath(__file__)),
+)
 DAY_EXPORT_DIR = f'{PROJECT_ROOT}/data_today'
 DISTANCES_FILENAME = 'distances.json'  # <- edit if yours has a different name
 TODAY_OUTPUT_DIR = f'{PROJECT_ROOT}/today'

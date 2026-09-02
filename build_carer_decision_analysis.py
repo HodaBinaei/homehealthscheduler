@@ -18,7 +18,11 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 import json, math
 
-PROJECT_ROOT = '/home/hoda/Desktop/homehealthscheduler_local_pipeline'
+import os
+PROJECT_ROOT = os.environ.get(
+    'HHS_PROJECT_ROOT',
+    os.path.dirname(os.path.abspath(__file__)),
+)
 
 # Reuse the full historical foundation + classifier, unchanged, up to (not including) the
 # day-specific JSON-building steps.

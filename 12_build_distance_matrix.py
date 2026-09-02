@@ -1,6 +1,10 @@
 import json, pickle, time
 
-PROJECT_ROOT = '/home/hoda/Desktop/homehealthscheduler_local_pipeline'
+import os
+PROJECT_ROOT = os.environ.get(
+    'HHS_PROJECT_ROOT',
+    os.path.dirname(os.path.abspath(__file__)),
+)
 
 def norm(s):
     if s is None:

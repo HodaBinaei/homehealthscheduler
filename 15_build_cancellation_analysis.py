@@ -1,7 +1,11 @@
 import csv, sys, json, datetime
 from collections import defaultdict, Counter
 
-PROJECT_ROOT = '/home/hoda/Desktop/homehealthscheduler_local_pipeline'
+import os
+PROJECT_ROOT = os.environ.get(
+    'HHS_PROJECT_ROOT',
+    os.path.dirname(os.path.abspath(__file__)),
+)
 
 csv.field_size_limit(sys.maxsize)
 

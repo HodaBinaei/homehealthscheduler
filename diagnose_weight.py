@@ -8,7 +8,11 @@ Example: python3 diagnose_weight.py 342 554
 """
 import sys, json
 
-PROJECT_ROOT = '/home/hoda/Desktop/homehealthscheduler_local_pipeline'
+import os
+PROJECT_ROOT = os.environ.get(
+    'HHS_PROJECT_ROOT',
+    os.path.dirname(os.path.abspath(__file__)),
+)
 
 prid_target = sys.argv[1] if len(sys.argv) > 1 else '342'
 crid_target = sys.argv[2] if len(sys.argv) > 2 else '554'

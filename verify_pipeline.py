@@ -7,7 +7,11 @@ Usage: python3 verify_pipeline.py
 import json, re, sys
 from collections import Counter
 
-PROJECT_ROOT = '/home/hoda/Desktop/homehealthscheduler_local_pipeline'
+import os
+PROJECT_ROOT = os.environ.get(
+    'HHS_PROJECT_ROOT',
+    os.path.dirname(os.path.abspath(__file__)),
+)
 DAY_EXPORT_DIR = f'{PROJECT_ROOT}/data_today'
 DAY_PATIENTS_FILENAME = 'patients.json'      # <- must match what build_full_recompute_real_day.py used
 DAY_CAREGIVERS_FILENAME = 'caregivers.json'  # <- same

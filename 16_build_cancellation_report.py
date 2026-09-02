@@ -5,7 +5,11 @@ from openpyxl.utils import get_column_letter
 from collections import defaultdict
 import os
 
-PROJECT_ROOT = '/home/hoda/Desktop/homehealthscheduler_local_pipeline'
+import os
+PROJECT_ROOT = os.environ.get(
+    'HHS_PROJECT_ROOT',
+    os.path.dirname(os.path.abspath(__file__)),
+)
 os.makedirs('./output', exist_ok=True)
 
 with open(f'{PROJECT_ROOT}/cancellation_analysis.json') as f:
