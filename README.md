@@ -96,3 +96,30 @@ intentional dislike.
 Both Option A and Option B have been tested end-to-end against this exact folder layout --
 including a real 528-patient / 62-caregiver day export -- with 0 schema-validation errors,
 0 patient requests left without a feasible carer, and 0 double-up members left without one.
+
+## Setup for a new machine
+
+```bash
+git clone https://github.com/HodaBinaei/homehealthscheduler.git
+cd homehealthscheduler
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+mkdir -p data data_today output today
+```
+
+`PROJECT_ROOT` is derived from the script's own location, so the pipeline
+works from any directory. Override with `HHS_PROJECT_ROOT` if needed.
+
+## Data (NOT in this repo)
+
+These contain client and carer personal data and are excluded by
+`.gitignore`. Obtain them through Caremark's approved internal channel —
+never email them, never commit them.
+
+Place in `data/`:
+- VisitExport.csv
+- users-new.json
+- clients-new.json
+- driving_data.json
+
+`data_today/`, `today/` and `output/` are populated by the pipeline.
