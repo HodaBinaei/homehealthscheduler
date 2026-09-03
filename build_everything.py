@@ -21,11 +21,7 @@ csv.field_size_limit(sys.maxsize)
 # =============================================================================
 # CONFIG
 # =============================================================================
-import os
-PROJECT_ROOT = os.environ.get(
-    'HHS_PROJECT_ROOT',
-    os.path.dirname(os.path.abspath(__file__)),
-)
+PROJECT_ROOT = '/home/hoda/Desktop/homehealthscheduler_local_pipeline'
 CSV_PATH = f'{PROJECT_ROOT}/data/VisitExport.csv'
 USERS_PATH = f'{PROJECT_ROOT}/data/users-new.json'
 CLIENTS_PATH = f'{PROJECT_ROOT}/data/clients-new.json'
