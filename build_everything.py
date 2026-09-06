@@ -717,7 +717,9 @@ _notes_text = [
     "requirement start AND end time (median), plus the ACTUAL start AND end time (median) "
     "and their variance (std dev in minutes) -- how differently the visit really happens "
     "day to day compared to what was scheduled -- visit count, and the pattern "
-    "classification (Weekly / Occasional / etc.).",
+    "classification (Weekly / Occasional / etc.). Also shows who else has real historical "
+    "experience with that same client on that weekday, and their visit count -- so it's "
+    "visible who could realistically step in if she were off.",
     "2. OFF-ROUTINE CLIENTS -- every client outside her Weekly roster she's ever visited, "
     "with visit count and first/last visit dates.",
     "3. GEOGRAPHIC REACH -- her search radius, how many active clients are reachable to her, "
@@ -855,7 +857,7 @@ for carer in sorted(carer_all_visited_clients.keys()):
     r += 1
     _headers = ['Client', 'Weekday', 'Requirement Start', 'Requirement End', 'Time Variance (min)',
                 'Actual Start', 'Actual End', 'Actual Start Variance (min)', 'Actual End Variance (min)',
-                'Visits', 'Pattern']
+                'Visits', 'Pattern', 'Who Else Covers This If She Is Off', 'Their Visit Count']
     for _col, _h in enumerate(_headers, start=1):
         _c = ws.cell(row=r, column=_col, value=_h)
         _c.font = _header_font
@@ -863,7 +865,16 @@ for carer in sorted(carer_all_visited_clients.keys()):
     r += 1
     for wd, client, start_str, end_str, variance, n_visits, pattern, act_start, act_end, act_start_var, act_end_var in sorted(
             _carer_slots.get(carer, []), key=lambda x: (x[1], x[0])):
-        vals = [client, wd, start_str, end_str, variance, act_start, act_end, act_start_var, act_end_var, n_visits, pattern]
+        _other_carer_counts = Counter()
+        for _cluster in client_slot_history.get((client, wd), []):
+            for _c2, _dt2, _a_s2 in _cluster:
+                if _c2 != carer:
+                    _other_carer_counts[_c2] += 1
+        _top_other = _other_carer_counts.most_common(1)
+        _who_else = _top_other[0][0] if _top_other else 'No one else has real history with this client'
+        _who_else_count = _top_other[0][1] if _top_other else ''
+        vals = [client, wd, start_str, end_str, variance, act_start, act_end, act_start_var, act_end_var,
+                n_visits, pattern, _who_else, _who_else_count]
         fill = _weekly_fill if pattern == 'Weekly' else None
         for _col, v in enumerate(vals, start=1):
             _cell = ws.cell(row=r, column=_col, value=v)
@@ -2459,6 +2470,43 @@ if _carer_fallback_count:
           f"(>= {STRONG_MATCH_THRESHOLD}) same-weekday match.")
 
 # ---------------------------------------------------------------------------
+# GENERAL per-carer cross-weekday reuse: for EVERY carer working today, for EVERY client she
+# has real history with (any weekday), if she doesn't already have a pair for that client's
+# request(s) today (no same-weekday match at all for her specifically), check whether she has
+# a genuine Weekly relationship with that client on some OTHER weekday -- and if so, add her
+# as a candidate today with that EXACT reused weight. Unlike Step 6/7 above (which only rescue
+# a patient with zero candidates, or add a carer with zero pairs anywhere), this applies
+# regardless of whether the patient already has other candidates or the carer already has
+# other pairs today -- a carer's own real, established pattern with a specific client counts
+# on its own, independent of what else is going on that day.
+_general_reuse_count = 0
+for _carer, _crid in carer_to_crid.items():
+    _her_clients = carer_all_visited_clients.get(_carer, set())
+    _her_existing_prids = {r['prid'] for r in feasibility_pairs if r['crid'] == _crid}
+    for _client in _her_clients:
+        _client_prids_today = {r['prid'] for r in day_requirements if r['client'] == _client}
+        if not _client_prids_today or _client_prids_today & _her_existing_prids:
+            continue  # she already has a pair for this client today, or client has no request today
+        _reuse_weight = best_weight_on_other_weekday(_carer, _client, TARGET_WEEKDAY)
+        if _reuse_weight <= 0:
+            continue
+        for _prid in _client_prids_today:
+            _existing_for_prid = [r for r in feasibility_pairs if r['prid'] == _prid]
+            if any(r['weight'] == 2.0 for r in _existing_for_prid):
+                continue  # patient already has a genuinely exclusive carer today -- don't add anyone else
+            _w = _reuse_weight
+            if _w == 2.0 and any(r['weight'] >= 1.0 for r in _existing_for_prid):
+                _w = 0.99  # avoid a conflicting second exclusive claim when a real guaranteed candidate already exists today
+            add_pair(_prid, _crid, _w)
+            _general_reuse_count += 1
+
+if _general_reuse_count:
+    print(f"General cross-weekday reuse applied for {_general_reuse_count} carer-patient pair(s) -- "
+          f"any carer working today with a genuine Weekly relationship to a client on a DIFFERENT "
+          f"weekday, but no history for that client today specifically, was added as a candidate "
+          f"using her exact weight from that other weekday.")
+
+# ---------------------------------------------------------------------------
 # DOUBLE-UP same-carer conflict: a true double-up (linked via match_request_list) needs TWO
 # DIFFERENT carers at the SAME TIME. The same carer holding a "guaranteed" weight (1.0 or
 # 2.0) on more than one leg of the same simultaneous group is a logical impossibility -- she
@@ -2840,6 +2888,9 @@ caregiver_by_crid = {c['crid']: c for c in caregivers}
 feas_by_crid = defaultdict(list)
 for row in feasibility_pairs:
     feas_by_crid[row['crid']].append(row)
+feas_by_prid = defaultdict(list)
+for row in feasibility_pairs:
+    feas_by_prid[row['prid']].append(row)
 prid_to_pid_display = {r['prid']: r['pid'] for r in day_requirements}
 
 # ---------------------------------------------------------------------------
@@ -2878,6 +2929,10 @@ notes = [
     "3. TODAY'S FEASIBILITY ASSIGNMENTS -- every patient she's a candidate for today, her "
     "final weight, and the full breakdown that produced it (consistency %, status, "
     "recency decay, concentration factor).",
+    "4. IF SHE'S OFF TODAY -- WHO ELSE COVERS -- for every patient where she holds a "
+    "guaranteed weight (>=1.0) today, the next-best and second-best alternative candidates "
+    "(if any), so it's visible at a glance which of her patients would be left uncovered or "
+    "only weakly covered if she didn't work today.",
     "",
     f"Day situation: {today_carers_n} carers worked today vs a {avg_carers_recent:.1f} "
     f"recent-{TARGET_WEEKDAY} average (ratio {staffing_ratio:.2f}) -- "
@@ -3022,6 +3077,48 @@ for carer in carers_today:
     widths = [30, 10, 14, 16, 20, 14, 18]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
+
+    # ---------------------------------------------------------------------------
+    # NEW SECTION 4: IF SHE'S OFF TODAY -- WHO ELSE COVERS
+    # For every patient where she holds a guaranteed weight (>=1.0) today, show the next-best
+    # alternative candidate(s) (excluding her), so it's visible at a glance which of her
+    # patients would be left uncovered or only weakly covered if she didn't work today.
+    # ---------------------------------------------------------------------------
+    r += 1
+    ws.cell(row=r, column=1, value="4. IF SHE'S OFF TODAY -- WHO ELSE COVERS").font = section_font
+    r += 1
+    headers4 = ['Client', 'Her Weight', 'Next-Best Carer', 'Next-Best Weight', '2nd Alternative', '2nd Alt Weight']
+    for col, h in enumerate(headers4, start=1):
+        c = ws.cell(row=r, column=col, value=h)
+        c.font = header_font
+        c.fill = header_fill
+    r += 1
+    guaranteed_rows_here = [row for row in rows_here if row['weight'] >= 1.0]
+    for row in guaranteed_rows_here:
+        pid = prid_to_pid_display.get(row['prid'])
+        client = pid_to_client.get(pid, '?')
+        others = sorted([o for o in feas_by_prid.get(row['prid'], []) if o['crid'] != crid],
+                         key=lambda x: -x['weight'])
+        alt1 = others[0] if len(others) > 0 else None
+        alt2 = others[1] if len(others) > 1 else None
+        alt1_name = caregiver_by_crid.get(alt1['crid'], {}).get('name', '') + ' ' + \
+            caregiver_by_crid.get(alt1['crid'], {}).get('lastname', '') if alt1 else 'NO ALTERNATIVE'
+        alt2_name = caregiver_by_crid.get(alt2['crid'], {}).get('name', '') + ' ' + \
+            caregiver_by_crid.get(alt2['crid'], {}).get('lastname', '') if alt2 else ''
+        vals4 = [client, row['weight'], alt1_name.strip(), alt1['weight'] if alt1 else '',
+                  alt2_name.strip(), alt2['weight'] if alt2 else '']
+        alt1_w = alt1['weight'] if alt1 else 0
+        fill4 = warn_fill if (not alt1 or alt1_w <= 0.1) else (good_fill if alt1_w >= 0.7 else None)
+        for col, v in enumerate(vals4, start=1):
+            cell = ws.cell(row=r, column=col, value=v)
+            cell.font = normal_font
+            if fill4:
+                cell.fill = fill4
+        r += 1
+    widths4 = [30, 12, 30, 16, 30, 14]
+    for i, w in enumerate(widths4, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = max(
+            ws.column_dimensions[get_column_letter(i)].width or 0, w)
 
 summary_ws.column_dimensions['A'].width = 28
 summary_ws.column_dimensions['C'].width = 70
