@@ -64,3 +64,8 @@ tzdata==2025.3
 urllib3==2.6.3
 wheel==0.46.3
 xyzservices==2025.11.0
+
+fastapi==0.128.0
+uvicorn==0.40.0
+httpx==0.28.1
+pydantic-settings==2.12.0

@@ -11,6 +11,7 @@
 !*.cfg
 !requirements.txt
 !.gitignore
+!.env.example
 
 # Re-deny data formats even if allowed above
 *.csv
