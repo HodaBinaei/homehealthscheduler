@@ -36,6 +36,15 @@ DAY_CAREGIVERS_FILENAME = 'caregivers.json'  # <- exact filename in DAY_EXPORT_D
 OUTPUT_DIR = f'{PROJECT_ROOT}/output'
 HHS_SCHEMA_PATH = PROJECT_ROOT
 
+# Which date this run is FOR (drives every weekday-dependent calculation in the whole
+# script -- Weekly classification, at-risk rotation, etc.). Leave as None to default to
+# today's actual date. To force a specific date instead (e.g. running yesterday's data,
+# or testing a different day), set it as a string in 'YYYY-MM-DD' format -- for example:
+#   TARGET_DATE_OVERRIDE = '2026-09-06'
+# This does NOT need to match the "date" field inside your data_today/patients.json file --
+# whatever you set (or the default of today) here is what's actually used.
+# TARGET_DATE_OVERRIDE = None
+TARGET_DATE_OVERRIDE = '2026-09-09'
 import os as _os
 for _fname in (DAY_PATIENTS_FILENAME, DAY_CAREGIVERS_FILENAME):
     _fpath = f'{DAY_EXPORT_DIR}/{_fname}'
@@ -74,7 +83,7 @@ if not isinstance(_real_caregivers_raw, dict) or 'caregivers' not in _real_careg
         f"above -- check this file is your original export, not a computed output file."
     )
 
-TARGET_DATE = datetime.date.fromisoformat(_real_patients_raw['date'])
+TARGET_DATE = datetime.date.fromisoformat(TARGET_DATE_OVERRIDE) if TARGET_DATE_OVERRIDE else datetime.date.today()
 TARGET_WEEKDAY = TARGET_DATE.strftime('%A')
 
 DISLIKES = [
@@ -1723,9 +1732,9 @@ for req in day_requirements:
         if end_soft - start_soft < duration:
             end_soft = start_soft + duration
 
-    hard_buffer = 20
-    start_hard = max(min(start_soft - 15, start_soft - hard_buffer), 0)
-    end_hard = min(max(end_soft + 15, end_soft + hard_buffer), MAX_SCHEMA_MINUTE)
+    hard_buffer = 45
+    start_hard = max(start_soft - hard_buffer, 0)
+    end_hard = min(end_soft + hard_buffer, MAX_SCHEMA_MINUTE)
 
     # duration_reduction_priority: mean actual/requirement duration ratio for this slot --
     # how much it's historically been compressed in practice.
@@ -1832,21 +1841,18 @@ for p in patients:
     if len(group) < 2:
         continue
 
-    # Window size = MEAN of the biggest member's own historical ACTUAL durations (how long
-    # that visit genuinely tends to run in practice), not just its computed `duration` field
-    # -- a more direct, real-world-grounded anchor for how tight the shared window can be.
-    # Falls back to the `duration` field itself if this slot has no actual-duration history.
-    # Never allowed to come out SMALLER than any member's own duration, though -- the mean
-    # actual duration can legitimately be shorter than the stated duration (visits often run
-    # under time), but the schema requires the window to fit every member's own duration
-    # regardless, so the largest individual duration in the group is always a floor.
+    # Window size = the LARGEST stated `duration` among the group's members, with NO extra
+    # slack beyond that. Previously this used the mean of the biggest member's own historical
+    # ACTUAL durations (how long the visit tends to run in practice), which is a more
+    # real-world-grounded anchor in general -- but for a double-up specifically, any extra
+    # width beyond the stated duration is exactly the slack a solver can use to schedule the
+    # two legs sequentially instead of truly concurrently (confirmed directly: real engine
+    # "Match Overlap Violation" logs showed two 30-minute legs scheduled 27 minutes apart,
+    # inside a 60-minute window that came from a slot whose actual duration history averaged
+    # around 60 minutes even though both legs were only requesting 30). Keeping the window
+    # exactly at the stated duration removes that slack entirely.
     biggest = max(group, key=lambda g: g['request_window']['duration'])
-    dur_pairs = client_slot_durations.get(biggest.get('_slot_key'), []) if biggest.get('_slot_key') else []
-    if dur_pairs:
-        window_span = round(sum(a for r, a in dur_pairs) / len(dur_pairs))
-    else:
-        window_span = biggest['request_window']['duration']
-    window_span = max(window_span, biggest['request_window']['duration'])
+    window_span = biggest['request_window']['duration']
     if window_span - 15 < 10:  # same schema constraint as elsewhere: duration >= min_duration(15) + 10
         window_span = 25
     group_start_soft = min(g['request_window']['start_time_soft'] for g in group)
@@ -1881,6 +1887,43 @@ if long_visit_flags:
     print(f"NOTE: {len(long_visit_flags)} visit(s) exceeded 8h max duration, capped:")
     for prid, raw_dur in long_visit_flags:
         print(f"   {prid}: {raw_dur / 60:.1f}h -> capped to 8h")
+
+# ---------------------------------------------------------------------------
+# Minimum 1-hour hard-window gap between a client's own separate visits (not double-up
+# pairs, which have their own dedicated tightening above). The 45-minute hard-window
+# extension on each visit can otherwise let two of the same client's real, separate visits
+# overlap in their hard windows or leave less than an hour of real separation between them.
+# For each client with more than one non-double-up visit today, sorted by time, check the
+# gap between each consecutive pair's hard windows -- if under 60 minutes, pull back both
+# sides equally (split the shortfall) until exactly 60 minutes of gap remains.
+_gap_adjusted = 0
+_patients_by_client_today = defaultdict(list)
+for _p in patients:
+    if not _p['request_window']['match_request_list']:
+        _patients_by_client_today[_p['pid']].append(_p)
+for _pid, _plist in _patients_by_client_today.items():
+    if len(_plist) < 2:
+        continue
+    _plist.sort(key=lambda x: x['request_window']['start_time_soft'])
+    for _i in range(len(_plist) - 1):
+        _prev, _next = _plist[_i], _plist[_i + 1]
+        _gap = _next['request_window']['start_time_hard'] - _prev['request_window']['end_time_hard']
+        if _gap < 60:
+            _shortfall = 60 - _gap
+            _half = _shortfall // 2
+            # never pull a hard boundary back past 15 minutes beyond its own soft boundary --
+            # the schema itself requires at least a 15-minute hard/soft gap
+            _prev_room = _prev['request_window']['end_time_hard'] - _prev['request_window']['end_time_soft'] - 15
+            _next_room = _next['request_window']['start_time_soft'] - _next['request_window']['start_time_hard'] - 15
+            _prev_pull = min(_half, max(_prev_room, 0))
+            _next_pull = min(_shortfall - _half, max(_next_room, 0))
+            _prev['request_window']['end_time_hard'] -= _prev_pull
+            _next['request_window']['start_time_hard'] += _next_pull
+            _gap_adjusted += 1
+if _gap_adjusted:
+    print(f"Adjusted {_gap_adjusted} consecutive same-client visit pair(s) to maintain at least "
+          f"a 60-minute hard-window gap (pulled back both sides equally where the 45-minute "
+          f"extension would otherwise have left less separation).")
 
 print("\n" + "=" * 70)
 print("Build CAREGIVERS.JSON (only shift time trusted; rest recomputed from history)")
@@ -2479,10 +2522,38 @@ if _carer_fallback_count:
 # regardless of whether the patient already has other candidates or the carer already has
 # other pairs today -- a carer's own real, established pattern with a specific client counts
 # on its own, independent of what else is going on that day.
+#
+# Special case: a NEW, LOCAL carer -- tenure under 60 days AND every client she's visited so
+# far is within 50km of her own home (a genuinely area-based carer, not someone scattered
+# around testing different areas) -- gets her reused weight NORMALIZED UP to match the
+# strongest existing candidate for that specific request today, instead of her own raw
+# reused value. A carer this new hasn't had time to build up the same weight of history as
+# established carers even when her real pattern is genuine, so her weight shouldn't be
+# structurally disadvantaged purely by how little time has passed.
+NEW_CARER_LOCAL_TENURE_DAYS = 60
+NEW_CARER_LOCAL_RADIUS_KM = 50
+
+
+def carer_is_new_and_local(carer):
+    presence = carer_presence.get(carer)
+    if not presence or (TARGET_DATE - presence[0]).days >= NEW_CARER_LOCAL_TENURE_DAYS:
+        return False
+    her_clients = carer_all_visited_clients.get(carer, set())
+    if not her_clients:
+        return False
+    for client in her_clients:
+        d = travel_km(carer, client)
+        if d is None or d > NEW_CARER_LOCAL_RADIUS_KM:
+            return False
+    return True
+
+
 _general_reuse_count = 0
+_new_local_normalized_count = 0
 for _carer, _crid in carer_to_crid.items():
     _her_clients = carer_all_visited_clients.get(_carer, set())
     _her_existing_prids = {r['prid'] for r in feasibility_pairs if r['crid'] == _crid}
+    _is_new_local = carer_is_new_and_local(_carer)
     for _client in _her_clients:
         _client_prids_today = {r['prid'] for r in day_requirements if r['client'] == _client}
         if not _client_prids_today or _client_prids_today & _her_existing_prids:
@@ -2495,6 +2566,11 @@ for _carer, _crid in carer_to_crid.items():
             if any(r['weight'] == 2.0 for r in _existing_for_prid):
                 continue  # patient already has a genuinely exclusive carer today -- don't add anyone else
             _w = _reuse_weight
+            if _is_new_local and _existing_for_prid:
+                _strongest_existing = max(r['weight'] for r in _existing_for_prid)
+                if _strongest_existing > _w:
+                    _w = _strongest_existing
+                    _new_local_normalized_count += 1
             if _w == 2.0 and any(r['weight'] >= 1.0 for r in _existing_for_prid):
                 _w = 0.99  # avoid a conflicting second exclusive claim when a real guaranteed candidate already exists today
             add_pair(_prid, _crid, _w)
@@ -2505,6 +2581,11 @@ if _general_reuse_count:
           f"any carer working today with a genuine Weekly relationship to a client on a DIFFERENT "
           f"weekday, but no history for that client today specifically, was added as a candidate "
           f"using her exact weight from that other weekday.")
+if _new_local_normalized_count:
+    print(f"Of those, {_new_local_normalized_count} were normalized up to match the strongest "
+          f"existing candidate for that request -- new (< {NEW_CARER_LOCAL_TENURE_DAYS} days) "
+          f"local (all her clients within {NEW_CARER_LOCAL_RADIUS_KM}km) carers whose weight "
+          f"shouldn't be structurally disadvantaged just by how little time has passed.")
 
 # ---------------------------------------------------------------------------
 # DOUBLE-UP same-carer conflict: a true double-up (linked via match_request_list) needs TWO
