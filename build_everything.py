@@ -592,6 +592,46 @@ for client, wd_map in client_visits_by_wd.items():
 
 print(f"Carer breadth median: {MEDIAN_BREADTH}, carers with search radius: {len(carer_search_radius)}")
 
+# ---- gender_preference: female=1, male=2, both=3 ----
+# For each carer, look at every real historical visit she's done and what gender the client
+# was; if more than 80% of those visits were to one gender, that's her preference -- otherwise
+# both. Same logic in reverse for each client/patient, based on which gender the carers who
+# visited them actually were.
+def _gender_preference_from_counts(female_count, male_count):
+    total = female_count + male_count
+    if total == 0:
+        return 3
+    if female_count / total > 0.8:
+        return 1
+    if male_count / total > 0.8:
+        return 2
+    return 3
+
+
+carer_gender_preference = {}
+for carer, wd_map in roster.items():
+    female_count = male_count = 0
+    for wd, visits in wd_map.items():
+        for v in visits:
+            g = client_info.get(v['client'], {}).get('gender')
+            if g == 'female':
+                female_count += 1
+            elif g == 'male':
+                male_count += 1
+    carer_gender_preference[carer] = _gender_preference_from_counts(female_count, male_count)
+
+client_gender_preference = {}
+for client, wd_map in client_visits_by_wd.items():
+    female_count = male_count = 0
+    for wd, tagged in wd_map.items():
+        for carer, dt, e_dt, a_s, a_e in tagged:
+            g = carer_info.get(carer, {}).get('gender')
+            if g == 'female':
+                female_count += 1
+            elif g == 'male':
+                male_count += 1
+    client_gender_preference[client] = _gender_preference_from_counts(female_count, male_count)
+
 # ---- extend_feasibility classifier ----
 # extend = True for: (a) new carers (not enough tenure yet to judge), (b) carers who take on
 # new/off-routine patients at a rate at or above the peer median (compared against the
@@ -1666,8 +1706,15 @@ for req in day_requirements:
         # caught up with a brand-new client yet; falling back to 0.0/0.0 would silently
         # discard perfectly good location data the export already gave us.
         _loc = req.get('location') or {}
+        _is_du_fallback = '(du)' in client.lower()
+        _fallback_margin = 5 if _is_du_fallback else 20
+        _fallback_duration = max(req['end_min'] - req['start_min'], 15)
+        if _is_du_fallback and _fallback_duration < 25:
+            _fallback_duration = 25  # schema requires min_duration>=15 AND duration-min_duration>=10
+        _fallback_min_duration = max(_fallback_duration - 10, 15) if _is_du_fallback else max(_fallback_duration - 15, 15)
         patients.append({
             'pid': req['pid'], 'prid': prid, 'gender': gender_enum(req['gender']),
+            'gender_preference': client_gender_preference.get(client, 3),
             'name': req['first_name'], 'lastname': req['last_name'],
             'location_id': req['pid'],
             'location': {
@@ -1676,14 +1723,14 @@ for req in day_requirements:
                 'postcode': _loc.get('postcode', '') or '',
             },
             'request_window': {
-                'start_time_hard': max(req['start_min'] - 20, 0),
-                'end_time_hard': min(req['end_min'] + 20, MAX_SCHEMA_MINUTE),
+                'start_time_hard': max(req['start_min'] - _fallback_margin, 0),
+                'end_time_hard': min(req['end_min'] + _fallback_margin, MAX_SCHEMA_MINUTE),
                 'start_time_soft': req['start_min'], 'end_time_soft': req['end_min'],
-                'duration': max(req['end_min'] - req['start_min'], 15),
-                'min_duration': max(req['end_min'] - req['start_min'] - 15, 15),
+                'duration': _fallback_duration,
+                'min_duration': _fallback_min_duration,
                 'duration_reduction_priority': 0.3, 'request_window_priority': 0.5,
                 'soft_window_violation_level': 0.5,
-                'match_request_list': req['match_request_list'],
+                'match_request_list': req['match_request_list'] or (['unlocal_match_request'] if _is_du_fallback else []),
             },
             'extend_feasibility': {
                 'extend': True, 'max_distance_km': 20.0, 'max_time_minutes': 60,
@@ -1704,37 +1751,57 @@ for req in day_requirements:
     # at least 25 regardless of which specific min_duration formula is used below.
     if duration < 25:
         duration = 25
-    # Data-driven min_duration: the shortest the solver may compress this visit to is 2/3 of
-    # its duration (a 30-min call floors at 20, a 60-min call at 40, etc.) -- but never closer
-    # than the schema's own 10-minute gap, which binds tighter for shorter visits, and never
-    # below the schema's absolute floor of 15.
-    min_duration = max(min(round(duration * 2 / 3), duration - 10), 15)
 
-    # Soft window recomputed from historical ACTUAL times for this slot (not trusted from
-    # the export) -- same methodology as run_all_in_one.py.
-    best_key, best_diff = None, None
-    for cidx, cluster in enumerate(client_slot_history.get((client, TARGET_WEEKDAY), [])):
-        minutes = [dt.hour * 60 + dt.minute for _, dt, a_s in cluster]
-        med = sorted(minutes)[len(minutes) // 2]
-        diff = abs(med - start_min)
-        if diff <= TIME_GAP_MINUTES and (best_diff is None or diff < best_diff):
-            best_key, best_diff = (client, TARGET_WEEKDAY, cidx), diff
-    actual_pairs = client_slot_actual_times.get(best_key, []) if best_key else []
-    if actual_pairs:
-        actual_start_mins = [(a_s.hour * 60 + a_s.minute) for a_s, a_e in actual_pairs]
-        actual_end_mins = [(a_e.hour * 60 + a_e.minute) for a_s, a_e in actual_pairs]
-        p25_start = percentile(actual_start_mins, 25)
-        p75_end = percentile(actual_end_mins, 75)
-        start_soft = round(p25_start / 5) * 5
-        end_soft = max(round(p75_end / 5) * 5, start_soft + duration)
+    # A "(DU)" tagged client (checked case-insensitively against the combined name, so it
+    # catches the tag regardless of which of the raw name/lastname fields it's actually in)
+    # follows the SAME tight window rule as a real double-up, even when not linked via
+    # match_request_list: soft window = exactly the requested time (no historical widening),
+    # hard window = soft +/- 5 minutes, and min_duration = duration - 10 (floored at 15) --
+    # not the general 2/3-of-duration rule used everywhere else.
+    is_du = '(du)' in client.lower()
+
+    if is_du:
+        min_duration = max(duration - 10, 15)
     else:
+        # Data-driven min_duration: the shortest the solver may compress this visit to is
+        # 2/3 of its duration (a 30-min call floors at 20, a 60-min call at 40, etc.) -- but
+        # never closer than the schema's own 10-minute gap, which binds tighter for shorter
+        # visits, and never below the schema's absolute floor of 15.
+        min_duration = max(min(round(duration * 2 / 3), duration - 10), 15)
+
+    if is_du:
         start_soft, end_soft = start_min, end_min
         if end_soft - start_soft < duration:
             end_soft = start_soft + duration
+        hard_buffer = 5  # legal because match_request_list is set to ['unlocal_match_request'] below for is_du clients, making it non-empty
+        start_hard = max(start_soft - hard_buffer, 0)
+        end_hard = min(end_soft + hard_buffer, MAX_SCHEMA_MINUTE)
+    else:
+        # Soft window recomputed from historical ACTUAL times for this slot (not trusted from
+        # the export) -- same methodology as run_all_in_one.py.
+        best_key, best_diff = None, None
+        for cidx, cluster in enumerate(client_slot_history.get((client, TARGET_WEEKDAY), [])):
+            minutes = [dt.hour * 60 + dt.minute for _, dt, a_s in cluster]
+            med = sorted(minutes)[len(minutes) // 2]
+            diff = abs(med - start_min)
+            if diff <= TIME_GAP_MINUTES and (best_diff is None or diff < best_diff):
+                best_key, best_diff = (client, TARGET_WEEKDAY, cidx), diff
+        actual_pairs = client_slot_actual_times.get(best_key, []) if best_key else []
+        if actual_pairs:
+            actual_start_mins = [(a_s.hour * 60 + a_s.minute) for a_s, a_e in actual_pairs]
+            actual_end_mins = [(a_e.hour * 60 + a_e.minute) for a_s, a_e in actual_pairs]
+            p25_start = percentile(actual_start_mins, 25)
+            p75_end = percentile(actual_end_mins, 75)
+            start_soft = round(p25_start / 5) * 5
+            end_soft = max(round(p75_end / 5) * 5, start_soft + duration)
+        else:
+            start_soft, end_soft = start_min, end_min
+            if end_soft - start_soft < duration:
+                end_soft = start_soft + duration
 
-    hard_buffer = 45
-    start_hard = max(start_soft - hard_buffer, 0)
-    end_hard = min(end_soft + hard_buffer, MAX_SCHEMA_MINUTE)
+        hard_buffer = 45
+        start_hard = max(start_soft - hard_buffer, 0)
+        end_hard = min(end_soft + hard_buffer, MAX_SCHEMA_MINUTE)
 
     # duration_reduction_priority: mean actual/requirement duration ratio for this slot --
     # how much it's historically been compressed in practice.
@@ -1773,6 +1840,7 @@ for req in day_requirements:
 
     patients.append({
         'pid': info['id'], 'prid': prid, 'gender': gender_enum(info['gender']),
+        'gender_preference': client_gender_preference.get(client, 3),
         'name': info['first_name'], 'lastname': info['last_name'],
         'location_id': info['id'],
         'location': {'latitude': info['lat'], 'longitude': info['lon'], 'postcode': info['postcode']},
@@ -1783,7 +1851,7 @@ for req in day_requirements:
             'duration_reduction_priority': duration_reduction_priority,
             'request_window_priority': request_window_priority,
             'soft_window_violation_level': soft_window_violation_level,
-            'match_request_list': req['match_request_list'],
+            'match_request_list': req['match_request_list'] or (['unlocal_match_request'] if is_du else []),
         },
         'extend_feasibility': {
             # Per the other chat's own design, patient-side extend is a flat default -- it's
@@ -2005,7 +2073,9 @@ for carer, shift in carer_shift_input.items():
     if not info or not info['lat']:
         print(f"WARNING: '{carer}' doesn't match an active carer with a home coordinate -- skipped.")
         continue
-    shift_start = max(shift['start_min'], 0)
+    # No carer's shift is ever allowed to start before 7:30 (450 minutes), even if her real
+    # day-export shift data says earlier -- clamped up to 7:30 regardless.
+    shift_start = max(shift['start_min'], 450)
     shift_end = min(shift['end_min'], MAX_SCHEMA_MINUTE)
     crid = shift['crid']
     carer_to_crid[carer] = crid
@@ -2031,6 +2101,7 @@ for carer, shift in carer_shift_input.items():
     travel_mode_map = {'Car': 'driving', 'Walk': 'walking'}
     caregivers.append({
         'cid': shift['cid'], 'crid': crid, 'gender': gender_enum(info['gender']),
+        'gender_preference': carer_gender_preference.get(carer, 3),
         'name': info['first_name'], 'lastname': info['last_name'],
         'travel_mode': travel_mode_map.get(info['travel_method'], 'driving'),
         'location_id': info['id'],

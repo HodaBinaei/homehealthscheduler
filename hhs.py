@@ -28,6 +28,12 @@ class Gender(str, Enum):
     PREFER_NOT_TO_SAY = "prefer_not_to_say"
 
 
+class GenderPreference(int, Enum):
+    FEMALE = 1
+    MALE = 2
+    BOTH = 3
+
+
 class TravelMode(str, Enum):
     DRIVING = "driving"
     WALKING = "walking"
@@ -158,7 +164,10 @@ class RequestWindow(BaseModel):
         For a match_request_list (double-up) request, the hard/soft margin is tightened to 5
         minutes instead of the usual 15 -- these requests are already sharing a deliberately
         narrow, forced-overlap window with their linked partner(s), and the wider general
-        margin isn't needed there.
+        margin isn't needed there. A client tagged "(DU)" but matched with an external
+        request outside this system uses the placeholder entry "unlocal_match_request" in
+        match_request_list for exactly this reason -- it's still a non-empty list, so it
+        gets the same tightened margin without needing a real, resolvable partner ID.
         """
         start_time_hard = values.start_time_hard
         end_time_hard = values.end_time_hard
@@ -229,6 +238,13 @@ class Patient(BaseModel):
         description="Gender of the patient",
         example=Gender.MALE
     )]
+    gender_preference: Annotated[GenderPreference, Field(
+        ...,
+        description="Patient's real historical gender preference for carers, derived from "
+        "visit history: 1 = female, 2 = male, 3 = both (no single gender exceeded 80% of "
+        "her real visits).",
+        example=GenderPreference.BOTH
+    )]
     location_id: Annotated[str, Field(
         ...,
         description="Location ID",
@@ -255,6 +271,13 @@ class Caregiver(BaseModel):
         ...,
         description="Gender of the caregiver",
         example=Gender.FEMALE
+    )]
+    gender_preference: Annotated[GenderPreference, Field(
+        ...,
+        description="Caregiver's real historical gender preference for patients, derived "
+        "from visit history: 1 = female, 2 = male, 3 = both (no single gender exceeded 80% "
+        "of her real visits).",
+        example=GenderPreference.BOTH
     )]
     travel_mode: Annotated[TravelMode, Field(
         ...,
@@ -518,6 +541,7 @@ if __name__ == "__main__":
         pid="123456789",
         prid="987654321",
         gender=Gender.MALE,
+        gender_preference=GenderPreference.BOTH,
         location_id="123456789",
         location=Location(latitude=37.7749, longitude=-122.4194, postcode="94103"),
         request_window=RequestWindow(
@@ -545,6 +569,7 @@ if __name__ == "__main__":
         cid="987654321",
         crid="123456789",
         gender=Gender.FEMALE,
+        gender_preference=GenderPreference.BOTH,
         travel_mode=TravelMode.DRIVING,
         location_id="987654321",
         location=Location(latitude=37.7749, longitude=-122.4194, postcode="94103"),
