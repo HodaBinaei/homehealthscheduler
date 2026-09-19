@@ -41,21 +41,35 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ### Run (Docker)
 
-Requires PostgreSQL reachable on the host (see `DB_*` in `.env`) and
-`engine-service` already up (`scheduler-api` on host `:8000`).
-
 ```bash
 docker compose up --build -d
 ```
 
-Bridge publishes **`:8001`** by default (`HHS_HOST_PORT`) so it does not clash
-with `scheduler-api` on `:8000`. Compose remaps `DB_HOST` / `ENGINE_BASE_URL`
-to `host.docker.internal`.
+Bridge publishes **`:8001`** by default (`HHS_HOST_PORT`).
+
+**EC2 with Panel `server` stack:** join `server_default` and call the bridge by
+container name (Linux hairpin via `host.docker.internal` often fails):
 
 ```bash
-curl http://localhost:8001/health
-curl http://localhost:8001/health/db
+# in homehealthscheduler/.env
+HHS_DB_HOST=db
+DB_PORT=5432
+HHS_ENGINE_BASE_URL=http://34.244.104.57/api-engine
+PANEL_DOCKER_NETWORK=server_default
+
+docker compose up --build -d
+
+# in server/.env
+BRIDGE_BASE_URL=http://homehealthscheduler-api:8000
+
+# verify from Panel backend
+docker exec -it server-app_backend-1 wget -S -O- http://homehealthscheduler-api:8000/health
 ```
+
+**Local Mac** (DB/engine on the host): keep `HHS_DB_HOST=host.docker.internal`
+and `HHS_ENGINE_BASE_URL=http://host.docker.internal:8000`. You still need an
+external Docker network named `server_default`, or set `PANEL_DOCKER_NETWORK` to
+an existing network.
 
 ### Example request
 

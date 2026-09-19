@@ -1,12 +1,14 @@
 # Home Health Scheduler bridge (FastAPI).
-# Expects existing host services:
-#   - PostgreSQL (Panel DB) on DB_PORT from .env (e.g. 6969)
-#   - engine-service scheduler-api on host :8000
 #
 # Usage:
 #   docker compose up --build -d
 #
-# Bridge listens on host :8001 (scheduler-api already owns :8000).
+# On EC2 with the Panel `server` stack, attach to its network so
+# app_backend can reach this container by name (not host.docker.internal):
+#   BRIDGE_BASE_URL=http://homehealthscheduler-api:8000
+#
+# Override via .env:
+#   HHS_HOST_PORT, HHS_DB_HOST, HHS_ENGINE_BASE_URL, PANEL_DOCKER_NETWORK
 
 services:
   hhs-api:
@@ -17,15 +19,18 @@ services:
     env_file:
       - .env
     environment:
-      # .env uses localhost; rewrite for container → host
-      DB_HOST: host.docker.internal
-      ENGINE_BASE_URL: http://host.docker.internal:8000
+      # Prefer explicit docker overrides; fall back to host-gateway for local Mac.
+      DB_HOST: ${HHS_DB_HOST:-host.docker.internal}
+      ENGINE_BASE_URL: ${HHS_ENGINE_BASE_URL:-http://host.docker.internal:8000}
       APP_HOST: 0.0.0.0
       APP_PORT: "8000"
     ports:
       - "${HHS_HOST_PORT:-8001}:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - panel
     restart: unless-stopped
     healthcheck:
       test:
@@ -39,3 +44,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+networks:
+  panel:
+    external: true
+    name: ${PANEL_DOCKER_NETWORK:-server_default}
