@@ -37,6 +37,18 @@ async def get_engine_job(
             detail=str(exc),
         ) from exc
 
+    progress_raw = body.get("progress_percent")
+    progress_percent: int | None = None
+    if progress_raw is not None and str(progress_raw).strip() != "":
+        try:
+            progress_percent = int(float(progress_raw))
+        except (TypeError, ValueError):
+            progress_percent = None
+
+    progress_message = body.get("progress_message")
+    if progress_message is not None:
+        progress_message = str(progress_message)
+
     return EngineJobStatusResponse(
         job_id=str(body.get("job_id") or job_id),
         job_type=body.get("job_type"),
@@ -46,4 +58,6 @@ async def get_engine_job(
         created_at=body.get("created_at"),
         started_at=body.get("started_at"),
         completed_at=body.get("completed_at"),
+        progress_percent=progress_percent,
+        progress_message=progress_message,
     )

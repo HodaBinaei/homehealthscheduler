@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import require_api_key
 from app.config import Settings, get_settings
-from app.schemas.request import ScheduleExecuteRequest, ScheduleJobResponse
+from app.schemas.request import MultiScheduleExecuteRequest, ScheduleJobResponse
 from app.services.submit_job import run_scheduler_job
 
 logger = logging.getLogger("hhs.multi_schedule")
@@ -21,16 +21,18 @@ router = APIRouter(prefix="/api-data/v1/multi-schedule", tags=["multi-schedule"]
     dependencies=[Depends(require_api_key)],
 )
 def create_multi_schedule(
-    body: ScheduleExecuteRequest,
+    body: MultiScheduleExecuteRequest,
     settings: Settings = Depends(get_settings),
 ) -> ScheduleJobResponse:
-    """Build multicpsat payload and submit to engine-service."""
+    """Build multicpsat payload for selected carers/patients and submit to engine-service."""
     try:
         result = run_scheduler_job(
             job_type="multicpsat",
             target_date=body.date.isoformat(),
             hour=body.hour,
             settings=settings,
+            visit_ids=[str(v) for v in body.visitIds],
+            provider_user_ids=body.providerUserIds,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

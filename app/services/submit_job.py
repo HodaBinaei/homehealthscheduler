@@ -16,6 +16,10 @@ from app.services.payload.engine_adapter import (
     to_multicpsat_request,
     to_reschedule_request,
 )
+from app.services.payload.subset_filter import (
+    filter_day_bundle_by_selection,
+    resolve_prids_for_visit_ids,
+)
 from app.services.runs_store import insert_run
 from app.services.s3_store import S3PayloadStore
 
@@ -36,10 +40,13 @@ def run_scheduler_job(
     target_date: str,
     hour: int,
     settings: Settings,
+    visit_ids: list[str] | None = None,
+    provider_user_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     """
     Build payload, archive to S3, submit to engine-service.
 
+    For multicpsat, pass visit_ids + provider_user_ids to process only that subset.
     Returns {run_id, job_id, job_type, status, date, caregiver_count, ...}.
     Raises on build/submit failure (after recording a FAILED run when possible).
     """
@@ -47,7 +54,20 @@ def run_scheduler_job(
     if adapter is None:
         raise ValueError(f"Unknown job type: {job_type}")
 
-    logger.info("Scheduler job started type=%s date=%s hour=%s", job_type, target_date, hour)
+    if job_type == "multicpsat":
+        if not visit_ids or not provider_user_ids:
+            raise ValueError(
+                "multicpsat requires non-empty visitIds and providerUserIds"
+            )
+
+    logger.info(
+        "Scheduler job started type=%s date=%s hour=%s visitIds=%s providerUserIds=%s",
+        job_type,
+        target_date,
+        hour,
+        visit_ids,
+        provider_user_ids,
+    )
     target = date.fromisoformat(target_date)
     run_id = str(uuid.uuid4())
     db = SessionLocal()
@@ -57,6 +77,20 @@ def run_scheduler_job(
 
     try:
         bundle = build_day_bundle_for_engine(db, target)
+        if job_type == "multicpsat":
+            roster = bundle.get("roster") or {}
+            prid_by_slot = roster.get("prid_by_slot") or {}
+            prids = resolve_prids_for_visit_ids(
+                db,
+                target,
+                list(visit_ids or []),
+                prid_by_slot=prid_by_slot,
+            )
+            bundle = filter_day_bundle_by_selection(
+                bundle,
+                provider_user_ids=list(provider_user_ids or []),
+                prids=prids,
+            )
         payload = adapter(bundle)
         caregiver_count = len(payload.get("caregiver_dict") or [])
         patient_count = len(payload.get("patient_dict") or [])

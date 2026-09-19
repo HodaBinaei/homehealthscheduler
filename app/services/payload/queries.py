@@ -414,7 +414,7 @@ def load_roster_visits(db: Session, target: date) -> list[dict[str, Any]]:
     rows = _exec(
         db,
         """
-        SELECT rv.receiver_type, rv.receiver_client_id, rv.provider_user_id,
+        SELECT rv.id, rv.receiver_type, rv.receiver_client_id, rv.provider_user_id,
                rv.client_schedule_id, COALESCE(rv.slot_index, 0) AS slot_index,
                rv.start_minute, rv.end_minute, rv.status, rv.pinned
         FROM roster_visit rv
@@ -422,6 +422,31 @@ def load_roster_visits(db: Session, target: date) -> list[dict[str, Any]]:
         WHERE r.date = :date
         """,
         {"date": target.isoformat()},
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def load_roster_visits_by_ids(
+    db: Session,
+    target: date,
+    visit_ids: list[str],
+) -> list[dict[str, Any]]:
+    """Load roster visits by UUID for a specific date (wrong-date ids are omitted)."""
+    if not visit_ids:
+        return []
+    rows = _exec(
+        db,
+        """
+        SELECT rv.id, rv.receiver_type, rv.receiver_client_id, rv.provider_user_id,
+               rv.client_schedule_id, COALESCE(rv.slot_index, 0) AS slot_index,
+               rv.start_minute, rv.end_minute, rv.status, rv.pinned
+        FROM roster_visit rv
+        JOIN roster r ON r.id = rv.roster_id
+        WHERE r.date = :date
+          AND rv.id IN :ids
+        """,
+        {"date": target.isoformat(), "ids": visit_ids},
+        expanding=["ids"],
     ).mappings().all()
     return [dict(r) for r in rows]
 

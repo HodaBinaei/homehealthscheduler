@@ -12,11 +12,11 @@ Panel contract (what the server should send): see **[PANEL_API_CONTRACT.md](./PA
 ### Flow
 
 1. Panel calls one of:
-   - `POST /api-data/v1/schedule` → engine `full-assignment`
-   - `POST /api-data/v1/multi-schedule` → engine `multicpsat`
+   - `POST /api-data/v1/multi-schedule` → engine `multicpsat` (primary; body includes `visitIds` + `providerUserIds` subset)
+   - `POST /api-data/v1/schedule` → engine `full-assignment` (legacy / tools; whole day)
    - `POST /api-data/v1/optimize` → engine `reschedule`
-   with `X-API-Key`, `date`, and `hour` only.
-2. The bridge loads carers, calls, feasible pairs, distances (and for optimize, current roster allocations) from the **same PostgreSQL** as the Panel server.
+   with `X-API-Key`, `date`, and `hour` (multi-schedule also requires `visitIds` / `providerUserIds`).
+2. The bridge loads carers, calls, feasible pairs, distances (and for optimize, current roster allocations) from the **same PostgreSQL** as the Panel server. Multi-schedule then **filters** to the selected visits (→ prids) and caregivers.
 3. It adapts the payload to engine-service DTOs, uploads to **S3** (if configured), and `POST`s to `{ENGINE_BASE_URL}/engine-api/api/v1/scheduler/...` with `ENGINE_API_KEY`.
 4. Response is **202** with `job_id`. Poll `GET /api-data/v1/jobs/{job_id}` (proxied to engine-service).
 5. Run metadata (+ S3 key) are stored in `hhs_engine_runs` (`token` = engine `job_id`).

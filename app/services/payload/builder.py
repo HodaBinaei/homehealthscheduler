@@ -68,6 +68,7 @@ def _load_roster_context(
         "cancelled_prids": cancelled,
         "visit_by_prid": visit_by_prid,
         "caregiver_preferences_by_user_id": preference_flags,
+        "prid_by_slot": prid_by_slot,
     }
 
 
