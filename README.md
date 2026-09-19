@@ -32,11 +32,29 @@ cp .env.example .env
 # edit .env: API_KEY, DB_*, ENGINE_BASE_URL, ENGINE_API_KEY
 ```
 
-### Run
+### Run (local)
 
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 # or: python -m app.main
+```
+
+### Run (Docker)
+
+Requires PostgreSQL reachable on the host (see `DB_*` in `.env`) and
+`engine-service` already up (`scheduler-api` on host `:8000`).
+
+```bash
+docker compose up --build -d
+```
+
+Bridge publishes **`:8001`** by default (`HHS_HOST_PORT`) so it does not clash
+with `scheduler-api` on `:8000`. Compose remaps `DB_HOST` / `ENGINE_BASE_URL`
+to `host.docker.internal`.
+
+```bash
+curl http://localhost:8001/health
+curl http://localhost:8001/health/db
 ```
 
 ### Example request
@@ -91,6 +109,7 @@ Health: `GET /health`, `GET /health/db`.
 | `S3_PAYLOAD_PREFIX` | Key prefix (default `hhs/engine-payloads`) |
 | `S3_PRESIGN_EXPIRES_SECONDS` | Download URL TTL (default `300`) |
 | `APP_HOST` / `APP_PORT` | Uvicorn bind (when using `python -m app.main`) |
+| `HHS_HOST_PORT` | Host port for Docker Compose (default `8001`) |
 
 Legacy: if `ENGINE_BASE_URL` is unset, `ENGINE_URL` ending in `/execute` is stripped to derive the base URL.
 

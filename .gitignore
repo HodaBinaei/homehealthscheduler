@@ -10,6 +10,10 @@
 !*.toml
 !*.cfg
 !requirements.txt
+!requirements-api.txt
+!Dockerfile
+!docker-compose.yml
+!.dockerignore
 !.gitignore
 !.env.example
 

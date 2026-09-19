@@ -1,0 +1,11 @@
+# Runtime deps for the FastAPI engine bridge (Docker / API-only install).
+# Full offline pipeline deps remain in requirements.txt.
+fastapi==0.128.0
+uvicorn==0.40.0
+httpx==0.28.1
+pydantic==2.12.5
+pydantic-settings==2.12.0
+SQLAlchemy==2.0.46
+psycopg2-binary==2.9.11
+boto3==1.40.0
+python-dotenv==1.2.1
