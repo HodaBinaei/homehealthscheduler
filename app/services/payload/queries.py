@@ -84,6 +84,7 @@ def load_client_schedules(db: Session, client_ids: list[int]) -> list[dict[str, 
         WHERE cs.client_id IN :ids
           AND cs.deleted_at IS NULL
           AND (csp.id IS NULL OR csp.not_send_to_engine = false)
+          AND (csp.id IS NULL OR csp.is_suspend = false)
         ORDER BY cs.client_id, cs.id
         """,
         {"ids": client_ids},

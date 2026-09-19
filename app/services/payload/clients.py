@@ -10,6 +10,7 @@ from app.services.payload.constants import (
     CLIENT_EXPORT_END_OF_DAY_EXTEND_THRESHOLD,
     GENDER_MAP,
     MIN_DURATION_FLOOR_RATIO,
+    MIN_MATCHED_PATIENT_WINDOW_SLACK_MINUTES,
     MIN_PATIENT_WINDOW_SLACK_MINUTES,
     MINUTES_IN_DAY,
     PATIENT_SEQUENCE_GAP_MINUTES,
@@ -199,7 +200,8 @@ def build_clients_output(db: Session, target: date) -> tuple[dict[str, dict[str,
                         "history_end": m["history_end"],
                     }
                     for m in members
-                ]
+                ],
+                min_slack=MIN_MATCHED_PATIENT_WINDOW_SLACK_MINUTES,
             )
             for m in members:
                 m["start_time"] = start

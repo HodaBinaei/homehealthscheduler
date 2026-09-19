@@ -14,7 +14,13 @@ from app.services.payload.users import build_users_output
 from app.services.payload.window_helpers import (
     apply_roster_caregiver_specification,
     apply_roster_patient_specification,
-    normalize_execute_caregiver_entry,
+)
+from app.services.payload.wire_shape import (
+    aggregate_request_window_priority,
+    fold_must_only_into_feasible,
+    to_wire_caregiver,
+    to_wire_feasible,
+    to_wire_patient,
 )
 
 
@@ -72,6 +78,18 @@ def assemble_execute_records_for_date(
     dict[str, dict[str, Any]],
     list[dict[str, Any]],
 ]:
+    caregivers, patients, feasible, _roster = assemble_execute_records_with_roster(db, target)
+    return caregivers, patients, feasible
+
+
+def assemble_execute_records_with_roster(
+    db: Session, target: date
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+]:
     clients_output, client_bundle = build_clients_output(db, target)
     users_output, preference_flags = build_users_output(db, target, client_bundle)
 
@@ -108,6 +126,7 @@ def assemble_execute_records_for_date(
             "min_duration": entry.get("min_duration"),
         }
 
+    caregiver_specs: list[dict[str, Any]] = []
     caregivers: dict[str, dict[str, Any]] = {}
     for key, entry in users_output.items():
         start, end = normalize_engine_time_window(entry["start_time"], entry["end_time"])
@@ -115,33 +134,33 @@ def assemble_execute_records_for_date(
             "hasOnlyLinks": False,
             "hasMustLinks": False,
         }
-        only_set, must = apply_roster_caregiver_specification(
+        only_set, must, must_sources, only_sources = apply_roster_caregiver_specification(
             only_set=list(entry.get("_computed_only_set") or []),
             must_visit_patients=dict(entry.get("must_visit_patients") or {}),
             has_only_links=bool(flags.get("hasOnlyLinks")),
             pinned_prids=roster["pinned_prids_by_caregiver_id"].get(int(entry["cid"]), []),
             cancelled_prids=roster["cancelled_prids"],
+            must_visit_sources=dict(entry.get("must_visit_sources") or {}),
+            only_set_sources=dict(entry.get("_computed_only_set_sources") or {}),
         )
-        # Panel execute forces only_set empty before send
-        caregiver = {
-            "crid": entry["crid"],
-            "cid": entry["cid"],
-            "first_name": entry["first_name"],
-            "last_name": entry["last_name"],
-            "start_time": start,
-            "end_time": end,
-            "gender": entry["gender"],
-            "travel_method": entry["travel_method"],
-            "only_set": [],
-            "dislike_set": entry.get("dislike_set") or [],
-            "must_visit_patients": must,
-            "latitude": entry["latitude"],
-            "longitude": entry["longitude"],
-            "do_extend_feasiblity": bool(entry.get("do_extend_feasiblity")),
-        }
-        caregivers[key] = normalize_execute_caregiver_entry(caregiver)
+        caregiver_specs.append(
+            {
+                "crid": entry["crid"],
+                "only_set": only_set,
+                "must_visit_patients": must,
+                "must_visit_sources": must_sources,
+                "only_set_sources": only_sources,
+            }
+        )
+        caregivers[key] = to_wire_caregiver(
+            {
+                **entry,
+                "start_time": start,
+                "end_time": end,
+            }
+        )
 
-    patients: dict[str, dict[str, Any]] = {}
+    patients_flat: dict[str, dict[str, Any]] = {}
     for key, entry in clients_output.items():
         start, end = normalize_engine_time_window(entry["start_time"], entry["end_time"])
         patient = {
@@ -165,11 +184,27 @@ def assemble_execute_records_for_date(
         }
         source = patient_sources.get(int(entry["prid"]))
         roster_visit = roster["visit_by_prid"].get(int(entry["prid"]))
+        matched = bool(entry.get("match_request"))
         if source:
-            patient = apply_roster_patient_specification(patient, source, roster_visit)
-        patients[key] = patient
+            patient = apply_roster_patient_specification(
+                patient, source, roster_visit, matched=matched
+            )
+        patients_flat[key] = patient
 
-    return caregivers, patients, crid_prid_feasible
+    # Drop cancelled patients from wire payload
+    cancelled = roster["cancelled_prids"]
+    patients_flat = {
+        k: v for k, v in patients_flat.items() if int(v["prid"]) not in cancelled
+    }
+
+    crid_prid_feasible = fold_must_only_into_feasible(crid_prid_feasible, caregiver_specs)
+
+    patients: dict[str, dict[str, Any]] = {}
+    for key, patient in patients_flat.items():
+        priority = aggregate_request_window_priority(int(patient["prid"]), caregiver_specs)
+        patients[key] = to_wire_patient(patient, request_window_priority=priority)
+
+    return caregivers, patients, to_wire_feasible(crid_prid_feasible), roster
 
 
 def build_execute_payload_for_date(db: Session, target: date) -> dict[str, Any]:
@@ -185,4 +220,20 @@ def build_execute_payload_for_date(db: Session, target: date) -> dict[str, Any]:
             "driving_data": matrices["driving_data"],
             "date_data": target.isoformat(),
         }
+    }
+
+
+def build_day_bundle_for_engine(db: Session, target: date) -> dict[str, Any]:
+    """Assemble wire records + matrices + roster context for engine-service adapters."""
+    caregivers, patients, feasible, roster = assemble_execute_records_with_roster(db, target)
+    matrices = load_distance_matrices_for_execute(db, target)
+    return {
+        "date": target.isoformat(),
+        "caregivers": caregivers,
+        "patients": patients,
+        "crid_prid_feasible": feasible,
+        "walking_data": matrices["walking_data"],
+        "cycling_data": matrices["cycling_data"],
+        "driving_data": matrices["driving_data"],
+        "roster": roster,
     }

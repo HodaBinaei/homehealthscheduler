@@ -3,9 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.payload.constants import (
+    DURATION_MINIMUM,
     MIN_DURATION_FLOOR_RATIO,
+    MIN_MATCHED_PATIENT_WINDOW_SLACK_MINUTES,
     MIN_ONLY_SET_LONG_CALL_MINUTES,
     MIN_PATIENT_WINDOW_SLACK_MINUTES,
+    MUST_SOURCE_COORDINATOR,
+    MUST_SOURCE_HISTORICAL,
     PATIENT_SEQUENCE_GAP_MINUTES,
     ROSTER_MUST_VISIT_WEIGHT,
 )
@@ -29,29 +33,75 @@ def resolve_only_set_long_call_rule(
         return {**sets, "only_set": unique_sorted(long_prids)}, False
 
     must = dict(sets.get("must_visit_patients") or {})
+    sources = dict(sets.get("must_visit_sources") or {})
+    only_sources = dict(sets.get("only_set_sources") or {})
     for prid in only_set:
-        must[str(prid)] = ROSTER_MUST_VISIT_WEIGHT
-    return {**sets, "only_set": [], "must_visit_patients": must}, True
+        key = str(prid)
+        must[key] = ROSTER_MUST_VISIT_WEIGHT
+        sources[key] = only_sources.get(key, MUST_SOURCE_COORDINATOR)
+    return {
+        **sets,
+        "only_set": [],
+        "only_set_sources": {},
+        "must_visit_patients": must,
+        "must_visit_sources": sources,
+    }, True
 
 
 def omit_must_when_only_set_present(sets: dict[str, Any]) -> dict[str, Any]:
     if not sets.get("only_set"):
         return sets
-    return {**sets, "must_visit_patients": {}}
+    return {**sets, "must_visit_patients": {}, "must_visit_sources": {}}
 
 
 def merge_caregiver_preference_sets(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
     must = dict(a.get("must_visit_patients") or {})
     must.update(b.get("must_visit_patients") or {})
+    sources = dict(a.get("must_visit_sources") or {})
+    sources.update(b.get("must_visit_sources") or {})
+    only_sources = dict(a.get("only_set_sources") or {})
+    only_sources.update(b.get("only_set_sources") or {})
     return {
         "only_set": unique_sorted((a.get("only_set") or []) + (b.get("only_set") or [])),
         "dislike_set": unique_sorted((a.get("dislike_set") or []) + (b.get("dislike_set") or [])),
         "must_visit_patients": must,
+        "must_visit_sources": sources,
+        "only_set_sources": only_sources,
     }
 
 
 def empty_caregiver_preference_sets() -> dict[str, Any]:
-    return {"only_set": [], "dislike_set": [], "must_visit_patients": {}}
+    return {
+        "only_set": [],
+        "dislike_set": [],
+        "must_visit_patients": {},
+        "must_visit_sources": {},
+        "only_set_sources": {},
+    }
+
+
+def set_must_prid(
+    sets: dict[str, Any],
+    prid: int,
+    *,
+    source: str = MUST_SOURCE_COORDINATOR,
+    weight: float = ROSTER_MUST_VISIT_WEIGHT,
+) -> None:
+    key = str(prid)
+    sets["must_visit_patients"][key] = weight
+    sets.setdefault("must_visit_sources", {})[key] = source
+
+
+def add_only_prids(
+    sets: dict[str, Any],
+    prids: list[int],
+    *,
+    source: str = MUST_SOURCE_COORDINATOR,
+) -> None:
+    sets["only_set"] = unique_sorted((sets.get("only_set") or []) + prids)
+    sources = sets.setdefault("only_set_sources", {})
+    for prid in prids:
+        sources[str(prid)] = source
 
 
 def filter_prids_overlapping_availability(
@@ -91,6 +141,16 @@ def filter_must_by_availability(
     return kept
 
 
+def filter_sources_by_keys(
+    sources: dict[str, str], keys: dict[str, float] | list[int]
+) -> dict[str, str]:
+    if isinstance(keys, dict):
+        keep = set(keys.keys())
+    else:
+        keep = {str(k) for k in keys}
+    return {k: v for k, v in sources.items() if k in keep}
+
+
 def widen_patient_window(
     start_time: int,
     end_time: int,
@@ -109,7 +169,7 @@ def widen_patient_window(
 
 def widen_match_group_window(
     members: list[dict[str, int]],
-    min_slack: int = MIN_PATIENT_WINDOW_SLACK_MINUTES,
+    min_slack: int = MIN_MATCHED_PATIENT_WINDOW_SLACK_MINUTES,
 ) -> tuple[int, int]:
     if not members:
         return 0, 0
@@ -322,42 +382,79 @@ def resolve_engine_patient_window_duration(
     return window_start, window_end, max(0, requested_duration)
 
 
+def pin_window_slack_minutes(*, matched: bool = False) -> int:
+    return (
+        MIN_MATCHED_PATIENT_WINDOW_SLACK_MINUTES
+        if matched
+        else MIN_PATIENT_WINDOW_SLACK_MINUTES
+    )
+
+
+def pinned_min_duration(duration: int) -> int:
+    return max(DURATION_MINIMUM, duration - 10)
+
+
 def apply_roster_caregiver_specification(
     only_set: list[int],
     must_visit_patients: dict[str, float],
     has_only_links: bool,
     pinned_prids: list[int],
     cancelled_prids: set[int],
-) -> tuple[list[int], dict[str, float]]:
+    must_visit_sources: dict[str, str] | None = None,
+    only_set_sources: dict[str, str] | None = None,
+) -> tuple[list[int], dict[str, float], dict[str, str], dict[str, str]]:
     only = [p for p in only_set if p not in cancelled_prids]
     must = {k: v for k, v in must_visit_patients.items() if int(k) not in cancelled_prids}
+    sources = {
+        k: v
+        for k, v in (must_visit_sources or {}).items()
+        if k in must
+    }
+    only_sources = {
+        k: v
+        for k, v in (only_set_sources or {}).items()
+        if int(k) in only
+    }
     roster_prids = unique_sorted([p for p in pinned_prids if p not in cancelled_prids])
     if not roster_prids:
-        return only, must
+        return only, must, sources, only_sources
     if has_only_links:
-        return unique_sorted(only + roster_prids), must
+        only = unique_sorted(only + roster_prids)
+        for prid in roster_prids:
+            only_sources[str(prid)] = MUST_SOURCE_HISTORICAL
+        return only, must, sources, only_sources
     for prid in roster_prids:
-        must[str(prid)] = ROSTER_MUST_VISIT_WEIGHT
-    return only, must
+        key = str(prid)
+        must[key] = ROSTER_MUST_VISIT_WEIGHT
+        sources[key] = MUST_SOURCE_HISTORICAL
+    return only, must, sources, only_sources
 
 
 def apply_roster_patient_specification(
     patient: dict[str, Any],
     source: dict[str, Any],
     roster_visit: dict[str, Any] | None,
+    *,
+    matched: bool = False,
 ) -> dict[str, Any]:
     if not roster_visit:
         return patient
 
     duration = roster_visit["end_minute"] - roster_visit["start_minute"]
     if roster_visit["pinned"]:
+        margin = pin_window_slack_minutes(matched=matched)
+        soft_start = roster_visit["start_minute"]
+        soft_end = roster_visit["end_minute"]
         return {
             **patient,
-            "start_time": roster_visit["start_minute"],
-            "end_time": roster_visit["end_minute"],
+            "start_time": soft_start - margin,
+            "end_time": soft_end + margin,
+            "_soft_start": soft_start,
+            "_soft_end": soft_end,
             "duration": duration,
-            "min_duration": duration,
+            "min_duration": pinned_min_duration(duration),
             "fix_window": 1,
+            "_pinned": True,
         }
 
     window_span = patient["end_time"] - patient["start_time"]
@@ -389,14 +486,4 @@ def apply_roster_patient_specification(
         "duration": duration,
         "min_duration": min_duration,
         "fix_window": fix_window,
-    }
-
-
-def normalize_execute_caregiver_entry(caregiver: dict[str, Any]) -> dict[str, Any]:
-    only = caregiver.get("only_set") or []
-    dislike = caregiver.get("dislike_set") or []
-    return {
-        **caregiver,
-        "only_set": only if only else None,
-        "dislike_set": dislike if dislike else None,
     }

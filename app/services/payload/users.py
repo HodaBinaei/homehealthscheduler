@@ -10,6 +10,7 @@ from app.services.payload.constants import (
     GENDER_MAP,
     MIN_CAREGIVER_SEGMENT_MINUTES,
     MINUTES_IN_DAY,
+    MUST_SOURCE_COORDINATOR,
     ROSTER_MUST_VISIT_WEIGHT,
     TRAVEL_METHOD_MAP,
 )
@@ -22,12 +23,15 @@ from app.services.payload.time_utils import (
     subtract_blocking,
 )
 from app.services.payload.window_helpers import (
+    add_only_prids,
     empty_caregiver_preference_sets,
     filter_must_by_availability,
     filter_prids_overlapping_availability,
+    filter_sources_by_keys,
     merge_caregiver_preference_sets,
     omit_must_when_only_set_present,
     resolve_only_set_long_call_rule,
+    set_must_prid,
     unique_sorted,
 )
 
@@ -147,16 +151,17 @@ def build_users_output(
             client_derived[uid] = empty_caregiver_preference_sets()
         return client_derived[uid]
 
-    # Profile: client only/must/dislike
+    # Profile: client only/must/dislike (coordinator-authored)
     for client_id, user_list in client_prefs["only"].items():
         prids = prids_by_client.get(client_id, [])
         for uid in user_list:
             sets = ensure(uid)
-            sets["only_set"] = unique_sorted(
-                sets["only_set"]
-                + filter_prids_overlapping_availability(
+            add_only_prids(
+                sets,
+                filter_prids_overlapping_availability(
                     prids, prid_windows, segments_by_user.get(uid, [])
-                )
+                ),
+                source=MUST_SOURCE_COORDINATOR,
             )
     for client_id, user_list in client_prefs["must"].items():
         prids = prids_by_client.get(client_id, [])
@@ -165,7 +170,7 @@ def build_users_output(
             for prid in filter_prids_overlapping_availability(
                 prids, prid_windows, segments_by_user.get(uid, [])
             ):
-                sets["must_visit_patients"][str(prid)] = ROSTER_MUST_VISIT_WEIGHT
+                set_must_prid(sets, prid, source=MUST_SOURCE_COORDINATOR)
     for client_id, user_list in client_prefs["dislike"].items():
         prids = prids_by_client.get(client_id, [])
         for uid in user_list:
@@ -193,11 +198,12 @@ def build_users_output(
             if uid is None:
                 continue
             sets = ensure(uid)
-            sets["only_set"] = unique_sorted(
-                sets["only_set"]
-                + filter_prids_overlapping_availability(
+            add_only_prids(
+                sets,
+                filter_prids_overlapping_availability(
                     schedule_prids, prid_windows, segments_by_user.get(uid, [])
-                )
+                ),
+                source=MUST_SOURCE_COORDINATOR,
             )
         for avail_id in prefs.get("must_user_availability_ids") or []:
             uid = avail_to_user.get(int(avail_id))
@@ -207,7 +213,7 @@ def build_users_output(
             for prid in filter_prids_overlapping_availability(
                 schedule_prids, prid_windows, segments_by_user.get(uid, [])
             ):
-                sets["must_visit_patients"][str(prid)] = ROSTER_MUST_VISIT_WEIGHT
+                set_must_prid(sets, prid, source=MUST_SOURCE_COORDINATOR)
         for uid in prefs.get("dislike_user_ids") or []:
             sets = ensure(int(uid))
             sets["dislike_set"] = unique_sorted(sets["dislike_set"] + client_prids)
@@ -221,7 +227,7 @@ def build_users_output(
         for prid in filter_prids_overlapping_availability(
             prids, prid_windows, segments_by_user.get(uid, [])
         ):
-            sets["must_visit_patients"][str(prid)] = ROSTER_MUST_VISIT_WEIGHT
+            set_must_prid(sets, prid, source=MUST_SOURCE_COORDINATOR)
 
     user_map = {int(u["id"]): u for u in users}
     users_output: dict[str, dict[str, Any]] = {}
@@ -264,22 +270,29 @@ def build_users_output(
             only_set = filter_prids_overlapping_availability(
                 only_raw, prid_windows, user_segments
             )
+            only_sources = {str(p): MUST_SOURCE_COORDINATOR for p in only_set}
             dislike_raw: list[int] = []
             for cid in prefs.get("dislike_client_ids") or []:
                 dislike_raw.extend(prids_by_client.get(int(cid), []))
             dislike_set = unique_sorted(dislike_raw)
 
             must_raw: dict[str, float] = {}
+            must_sources_raw: dict[str, str] = {}
             for sid in must_schedule_ids:
                 if sid in prid_by_availability:
-                    must_raw[str(prid_by_availability[sid])] = ROSTER_MUST_VISIT_WEIGHT
+                    key = str(prid_by_availability[sid])
+                    must_raw[key] = ROSTER_MUST_VISIT_WEIGHT
+                    must_sources_raw[key] = MUST_SOURCE_COORDINATOR
             must_visit = filter_must_by_availability(must_raw, user_segments, prid_windows)
+            must_sources = filter_sources_by_keys(must_sources_raw, must_visit)
 
             merged = merge_caregiver_preference_sets(
                 {
                     "only_set": only_set,
                     "dislike_set": dislike_set,
                     "must_visit_patients": must_visit,
+                    "must_visit_sources": must_sources,
+                    "only_set_sources": only_sources,
                 },
                 client_derived.get(user_id) or empty_caregiver_preference_sets(),
             )
@@ -319,6 +332,10 @@ def build_users_output(
                     [(seg_start, seg_end)],
                     prid_windows,
                 )
+                segment_sources = filter_sources_by_keys(
+                    resolved.get("must_visit_sources") or {},
+                    segment_must,
+                )
                 users_output[str(incremental_key)] = {
                     "crid": crid,
                     "cid": user_id,
@@ -328,14 +345,18 @@ def build_users_output(
                     "end_time": seg_end,
                     "gender": _map_gender(user.get("gender")),
                     "travel_method": _map_travel(user.get("travel_method")),
-                    "only_set": [],  # computed only used for flags / long-call; execute clears
                     "dislike_set": resolved["dislike_set"],
                     "must_visit_patients": segment_must,
+                    "must_visit_sources": segment_sources,
                     "latitude": user.get("latitude"),
                     "longitude": user.get("longitude"),
                     "extendedFeasibility": bool(user.get("extended_feasibility")),
                     "do_extend_feasiblity": bool(user.get("extended_feasibility")),
                     "_computed_only_set": resolved["only_set"],
+                    "_computed_only_set_sources": filter_sources_by_keys(
+                        resolved.get("only_set_sources") or {},
+                        resolved["only_set"],
+                    ),
                 }
                 incremental_key += 1
                 crid += 1
