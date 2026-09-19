@@ -60,18 +60,19 @@ class Settings(BaseSettings):
 
     @property
     def engine_full_assignment_url(self) -> str:
-        return f"{self.resolved_engine_base_url()}/api/v1/scheduler/full-assignment"
+        # engine-service mounts jobs under /engine-api (see engine-service/app/main.py)
+        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/scheduler/full-assignment"
 
     @property
     def engine_multicpsat_url(self) -> str:
-        return f"{self.resolved_engine_base_url()}/api/v1/scheduler/multicpsat"
+        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/scheduler/multicpsat"
 
     @property
     def engine_reschedule_url(self) -> str:
-        return f"{self.resolved_engine_base_url()}/api/v1/scheduler/reschedule"
+        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/scheduler/reschedule"
 
     def engine_job_url(self, job_id: str) -> str:
-        return f"{self.resolved_engine_base_url()}/api/v1/jobs/{job_id}"
+        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/jobs/{job_id}"
 
 
 @lru_cache
