@@ -21,7 +21,9 @@ Panel (`server`) talks to this bridge with `X-API-Key: $BRIDGE_API_KEY`.
 - Bridge maps visits → engine `prid`s via `client_schedule_id` + `slot_index`, filters caregivers by `cid`, then submits multicpsat.
 - `400` if either list is empty, visits are missing/wrong date/cancelled/ad-hoc, or the filter yields zero carers/patients.
 
-Success: `202` `{ status, date, job_id, job_type, run_id }`.
+Success: `202` `{ status, date, job_id, job_type, run_id }` — returned **immediately**.
+Payload build, S3 upload, and engine submit run in the background.
+`job_id` is a stable bridge token for polling/logs (not the engine id until submit finishes).
 
 ## Job status
 

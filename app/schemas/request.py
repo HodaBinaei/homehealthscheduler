@@ -1,4 +1,5 @@
-from datetime import date, datetime
+from datetime import date as DateOnly
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -6,7 +7,10 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class ScheduleExecuteRequest(BaseModel):
-    date: date = Field(..., description="Roster date from Panel (YYYY-MM-DD); patients come from roster_visit for this date")
+    date: DateOnly = Field(
+        ...,
+        description="Roster date from Panel (YYYY-MM-DD); patients come from roster_visit for this date",
+    )
     hour: int = Field(
         ...,
         ge=0,

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
 from app.auth import require_api_key
 from app.config import Settings, get_settings
 from app.schemas.request import ScheduleExecuteRequest, ScheduleJobResponse
-from app.services.submit_job import run_scheduler_job
+from app.services.submit_job import accept_scheduler_job, process_scheduler_job
 
 logger = logging.getLogger("hhs.optimize")
 
@@ -22,31 +22,38 @@ router = APIRouter(prefix="/api-data/v1/optimize", tags=["optimize"])
 )
 def create_optimize(
     body: ScheduleExecuteRequest,
+    background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
 ) -> ScheduleJobResponse:
-    """Build reschedule payload (with last_schedule from roster) and submit to engine-service."""
+    """Accept reschedule immediately; build + engine submit run in background."""
     try:
-        result = run_scheduler_job(
+        accepted = accept_scheduler_job(
             job_type="reschedule",
             target_date=body.date.isoformat(),
             hour=body.hour,
-            settings=settings,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except ConnectionError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("Optimize job failed date=%s", body.date.isoformat())
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
-        ) from exc
 
+    background_tasks.add_task(
+        process_scheduler_job,
+        run_id=accepted["run_id"],
+        job_id=accepted["job_id"],
+        job_type="reschedule",
+        target_date=accepted["date"],
+        hour=body.hour,
+        settings=settings,
+    )
+    logger.info(
+        "Optimize accepted date=%s job_id=%s run_id=%s (background)",
+        accepted["date"],
+        accepted["job_id"],
+        accepted["run_id"],
+    )
     return ScheduleJobResponse(
         status="accepted",
-        date=result["date"],
-        job_id=result["job_id"],
-        job_type=result["job_type"],
-        run_id=result.get("run_id"),
+        date=accepted["date"],
+        job_id=accepted["job_id"],
+        job_type=accepted["job_type"],
+        run_id=accepted["run_id"],
     )

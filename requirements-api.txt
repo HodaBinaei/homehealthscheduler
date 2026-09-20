@@ -9,3 +9,4 @@ SQLAlchemy==2.0.46
 psycopg2-binary==2.9.11
 boto3==1.40.0
 python-dotenv==1.2.1
+websockets==14.2

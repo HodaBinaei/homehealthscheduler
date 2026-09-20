@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth import require_api_key
@@ -18,7 +18,7 @@ from app.schemas.request import (
 )
 from app.services.runs_store import get_run_by_id, get_run_by_token, list_runs
 from app.services.s3_store import S3PayloadStore
-from app.services.submit_job import run_scheduler_job
+from app.services.submit_job import accept_scheduler_job, process_scheduler_job
 
 logger = logging.getLogger("hhs.schedule")
 
@@ -33,33 +33,40 @@ router = APIRouter(prefix="/api-data/v1/schedule", tags=["schedule"])
 )
 def create_schedule(
     body: ScheduleExecuteRequest,
+    background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
 ) -> ScheduleJobResponse:
-    """Build full-assignment payload and submit to engine-service."""
+    """Accept full-assignment immediately; build + engine submit run in background."""
     try:
-        result = run_scheduler_job(
+        accepted = accept_scheduler_job(
             job_type="full-assignment",
             target_date=body.date.isoformat(),
             hour=body.hour,
-            settings=settings,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except ConnectionError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("Schedule job failed date=%s", body.date.isoformat())
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
-        ) from exc
 
+    background_tasks.add_task(
+        process_scheduler_job,
+        run_id=accepted["run_id"],
+        job_id=accepted["job_id"],
+        job_type="full-assignment",
+        target_date=accepted["date"],
+        hour=body.hour,
+        settings=settings,
+    )
+    logger.info(
+        "Schedule accepted date=%s job_id=%s run_id=%s (background)",
+        accepted["date"],
+        accepted["job_id"],
+        accepted["run_id"],
+    )
     return ScheduleJobResponse(
         status="accepted",
-        date=result["date"],
-        job_id=result["job_id"],
-        job_type=result["job_type"],
-        run_id=result.get("run_id"),
+        date=accepted["date"],
+        job_id=accepted["job_id"],
+        job_type=accepted["job_type"],
+        run_id=accepted["run_id"],
     )
 
 
@@ -87,7 +94,7 @@ def get_run(
     token: str,
     db: Session = Depends(get_db),
 ) -> EngineRunItem:
-    """Get one engine run by engine job_id (stored as token)."""
+    """Get one engine run by bridge job_id (stored as token)."""
     run = get_run_by_token(db, token)
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
 from app.auth import require_api_key
 from app.config import Settings, get_settings
 from app.schemas.request import MultiScheduleExecuteRequest, ScheduleJobResponse
-from app.services.submit_job import run_scheduler_job
+from app.services.submit_job import accept_scheduler_job, process_scheduler_job
 
 logger = logging.getLogger("hhs.multi_schedule")
 
@@ -22,33 +22,42 @@ router = APIRouter(prefix="/api-data/v1/multi-schedule", tags=["multi-schedule"]
 )
 def create_multi_schedule(
     body: MultiScheduleExecuteRequest,
+    background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
 ) -> ScheduleJobResponse:
-    """Build multicpsat payload for selected carers/patients and submit to engine-service."""
+    """Accept multicpsat immediately; build + engine submit run in background."""
     try:
-        result = run_scheduler_job(
+        accepted = accept_scheduler_job(
             job_type="multicpsat",
             target_date=body.date.isoformat(),
             hour=body.hour,
-            settings=settings,
             visit_ids=[str(v) for v in body.visitIds],
             provider_user_ids=body.providerUserIds,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except ConnectionError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("Multi-schedule job failed date=%s", body.date.isoformat())
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
-        ) from exc
 
+    background_tasks.add_task(
+        process_scheduler_job,
+        run_id=accepted["run_id"],
+        job_id=accepted["job_id"],
+        job_type="multicpsat",
+        target_date=accepted["date"],
+        hour=body.hour,
+        settings=settings,
+        visit_ids=[str(v) for v in body.visitIds],
+        provider_user_ids=body.providerUserIds,
+    )
+    logger.info(
+        "Multi-schedule accepted date=%s job_id=%s run_id=%s (background)",
+        accepted["date"],
+        accepted["job_id"],
+        accepted["run_id"],
+    )
     return ScheduleJobResponse(
         status="accepted",
-        date=result["date"],
-        job_id=result["job_id"],
-        job_type=result["job_type"],
-        run_id=result.get("run_id"),
+        date=accepted["date"],
+        job_id=accepted["job_id"],
+        job_type=accepted["job_type"],
+        run_id=accepted["run_id"],
     )
