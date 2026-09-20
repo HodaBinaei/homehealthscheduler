@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from datetime import datetime, timezone
 from secrets import compare_digest
 from typing import Any
 
@@ -112,6 +114,23 @@ def _to_response(body: dict[str, Any], fallback_job_id: str) -> EngineJobStatusR
         progress_percent=progress_percent,
         progress_message=progress_message,
     )
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _rewrite_upstream_frame(raw: str | bytes, bridge_token: str) -> str:
+    """Rewrite engine jobId → bridge token so Panel always sees the stable id."""
+    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+    try:
+        payload = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        return text
+    if isinstance(payload, dict) and "jobId" in payload:
+        payload["jobId"] = bridge_token
+        return json.dumps(payload)
+    return text
 
 
 @router.get(
@@ -237,7 +256,7 @@ async def proxy_engine_job_logs_ws(
     Proxy live engine-service job log WebSocket to Panel clients.
 
     Waits until the bridge has an engine_job_id (background submit finished),
-    emitting status frames so loading UI keeps working across Panel ↔ bridge ↔ engine.
+    emitting status + log frames so loading UI keeps working across Panel ↔ bridge ↔ engine.
     """
     if not _bridge_api_key_ok(websocket, settings):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -257,7 +276,42 @@ async def proxy_engine_job_logs_ws(
 
     engine_job_id: str | None = None
     bridge_token = job_id
-    for _ in range(120):  # ~2 minutes
+    bridge_log_seq = 0
+    last_status_msg: str | None = None
+
+    async def _emit_bridge_progress(run: dict[str, Any], status_raw: str) -> None:
+        nonlocal bridge_log_seq, last_status_msg
+        if status_raw == STATUS_BUILDING:
+            msg = "Building engine payload from roster visits…"
+            pct = 5
+            st = "running"
+        else:
+            msg = "Job queued; waiting to build payload…"
+            pct = 0
+            st = "queued"
+        await websocket.send_json(
+            {
+                "type": "status",
+                "jobId": bridge_token,
+                "status": st,
+                "progressPercent": pct,
+                "progressMessage": msg if status_raw == STATUS_BUILDING else "queued",
+            }
+        )
+        if msg != last_status_msg:
+            last_status_msg = msg
+            bridge_log_seq += 1
+            await websocket.send_json(
+                {
+                    "type": "log",
+                    "jobId": bridge_token,
+                    "seq": bridge_log_seq,
+                    "line": msg,
+                    "ts": run.get("updated_at") or run.get("created_at") or _now_iso(),
+                }
+            )
+
+    for _ in range(180):  # ~3 minutes for large payload builds
         db = SessionLocal()
         try:
             run = get_run_by_job_ref(db, job_id)
@@ -271,13 +325,24 @@ async def proxy_engine_job_logs_ws(
         bridge_token = str(run.get("token") or job_id)
         status_raw = (run.get("status") or "").upper()
         if status_raw == STATUS_FAILED:
+            err = run.get("error") or "failed"
             await websocket.send_json(
                 {
                     "type": "status",
                     "jobId": bridge_token,
                     "status": "failed",
                     "progressPercent": 0,
-                    "progressMessage": run.get("error") or "failed",
+                    "progressMessage": err,
+                }
+            )
+            bridge_log_seq += 1
+            await websocket.send_json(
+                {
+                    "type": "log",
+                    "jobId": bridge_token,
+                    "seq": bridge_log_seq,
+                    "line": f"Bridge job failed: {err}",
+                    "ts": _now_iso(),
                 }
             )
             await websocket.send_json(
@@ -297,23 +362,19 @@ async def proxy_engine_job_logs_ws(
                     "progressMessage": "submitted to engine",
                 }
             )
+            bridge_log_seq += 1
+            await websocket.send_json(
+                {
+                    "type": "log",
+                    "jobId": bridge_token,
+                    "seq": bridge_log_seq,
+                    "line": "Submitted to engine-service; streaming solver logs…",
+                    "ts": _now_iso(),
+                }
+            )
             break
 
-        msg = (
-            "building payload"
-            if status_raw == STATUS_BUILDING
-            else "queued"
-        )
-        pct = 5 if status_raw == STATUS_BUILDING else 0
-        await websocket.send_json(
-            {
-                "type": "status",
-                "jobId": bridge_token,
-                "status": "running" if status_raw == STATUS_BUILDING else "queued",
-                "progressPercent": pct,
-                "progressMessage": msg,
-            }
-        )
+        await _emit_bridge_progress(run, status_raw)
         await asyncio.sleep(1.0)
     else:
         await websocket.send_json(
@@ -332,6 +393,13 @@ async def proxy_engine_job_logs_ws(
     if settings.engine_api_key:
         extra_headers["X-API-Key"] = settings.engine_api_key
 
+    logger.info(
+        "Proxying job logs WS bridge_token=%s engine_job_id=%s url=%s",
+        bridge_token,
+        engine_job_id,
+        upstream_url,
+    )
+
     try:
         async with websockets.connect(
             upstream_url,
@@ -348,11 +416,14 @@ async def proxy_engine_job_logs_ws(
             async def upstream_to_client() -> None:
                 try:
                     async for message in upstream:
-                        if isinstance(message, bytes):
-                            await websocket.send_bytes(message)
-                        else:
-                            await websocket.send_text(message)
+                        frame = _rewrite_upstream_frame(message, bridge_token)
+                        await websocket.send_text(frame)
                 except Exception:
+                    logger.exception(
+                        "Upstream log WS ended bridge_token=%s engine=%s",
+                        bridge_token,
+                        engine_job_id,
+                    )
                     return
 
             done, pending = await asyncio.wait(
