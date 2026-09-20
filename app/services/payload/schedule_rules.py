@@ -18,6 +18,17 @@ from app.services.payload.time_utils import (
 from app.services.payload.constants import MINUTES_IN_DAY
 
 
+def _days_include(days: Any, day_name: str) -> bool:
+    """True only when the schedule lists this weekday. Empty/missing days never match."""
+    if not days:
+        return False
+    needle = str(day_name).strip().casefold()
+    for d in days:
+        if str(d).strip().casefold() == needle:
+            return True
+    return False
+
+
 def find_schedule_occurrence_covering_date(schedule: dict[str, Any], target: date) -> date | None:
     prefs = schedule.get("preferences") or {}
     exceptions = schedule.get("exceptions") or []
@@ -46,8 +57,7 @@ def find_schedule_occurrence_covering_date(schedule: dict[str, Any], target: dat
 
     for candidate in candidates:
         day_name = day_name_from_date(candidate)
-        days = schedule.get("days") or []
-        if days and day_name not in days:
+        if not _days_include(schedule.get("days"), day_name):
             continue
 
         if prefs.get("is_temporary"):
@@ -108,11 +118,6 @@ def resolve_schedule_visit_window(schedule: dict[str, Any], target: date) -> tup
 
     occurrence = find_schedule_occurrence_covering_date(schedule, target)
     if not occurrence:
-        if max(0, schedule.get("end_time_date_offset_days") or 0) == 0:
-            start = to_minutes_hhmm(format_hhmm(schedule.get("requested_start_time")))
-            end = to_minutes_hhmm(format_hhmm(schedule.get("requested_end_time")))
-            if is_valid_minute_window(start, end):
-                return start, end
         return None
 
     offset = max(0, schedule.get("end_time_date_offset_days") or 0)
@@ -171,8 +176,7 @@ def find_availability_occurrence(
 
     for candidate in candidates:
         day_name = day_name_from_date(candidate)
-        days = slot.get("days") or []
-        if days and day_name not in days:
+        if not _days_include(slot.get("days"), day_name):
             continue
 
         if prefs.get("is_temporary"):

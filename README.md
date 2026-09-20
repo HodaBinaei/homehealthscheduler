@@ -22,7 +22,9 @@ Panel contract (what the server should send): see **[PANEL_API_CONTRACT.md](./PA
 5. Live logs: `WS /api-data/v1/jobs/{job_id}/logs/ws` (and HTTP `GET …/logs?after=`) proxy engine-service log stream — Panel relays these to FE `/roster-engine` as `engine.log`.
 6. Run metadata (+ S3 key) are stored in `hhs_engine_runs` (`token` = engine `job_id`).
 
-`hour` is accepted and validated (`0–23`) but **unused for payload build in v1**.
+`hour` is accepted from the Panel request (`0–23`), stored on the run, and
+forwarded with the job. Patient demand is loaded from **`roster_visit`** for the
+request `date` (`UNALLOCATED` + `ALLOCATED` only — same as the map / unallocated UI).
 
 ### Setup
 

@@ -6,12 +6,12 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class ScheduleExecuteRequest(BaseModel):
-    date: date
+    date: date = Field(..., description="Roster date from Panel (YYYY-MM-DD); patients come from roster_visit for this date")
     hour: int = Field(
         ...,
         ge=0,
         le=23,
-        description="Accepted and stored on the run; unused by payload build in v1",
+        description="Hour from Panel request (0–23); stored on the run and forwarded with the job",
     )
 
 

@@ -10,6 +10,10 @@ Panel (`server`) talks to this bridge with `X-API-Key: $BRIDGE_API_KEY`.
 | Full-assignment (legacy / tools) | `POST /api-data/v1/schedule` | `{ "date", "hour" }` |
 | Reschedule (whole day) | `POST /api-data/v1/optimize` | `{ "date", "hour" }` |
 
+`date` and `hour` always come from the Panel request. Patients are loaded from
+`roster_visit` for that `roster.date` with status **UNALLOCATED** or **ALLOCATED**
+(same set as the map / unallocated basket). CANCELLED and other dates are excluded.
+
 ### Multi-schedule subset
 
 - `visitIds` — Roster visit UUIDs for that date (same as suggest `visitIds`). **Required, non-empty.**

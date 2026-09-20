@@ -217,6 +217,7 @@ def load_user_availabilities(db: Session, user_ids: list[int]) -> list[dict[str,
         WHERE ua.user_id IN :ids
           AND ua.deleted_at IS NULL
           AND (uap.id IS NULL OR uap.is_unavailability = false)
+          AND (uap.id IS NULL OR uap.not_send_to_engine = false)
         ORDER BY ua.user_id, ua.id
         """,
         {"ids": user_ids},
@@ -408,6 +409,177 @@ def load_cancelled_slot_keys(db: Session, target: date) -> set[str]:
         {"date": target.isoformat()},
     ).mappings().all()
     return {f"{int(r['client_schedule_id'])}:{int(r['slot_index'])}" for r in rows}
+
+
+def load_day_engine_visits(db: Session, target: date) -> list[dict[str, Any]]:
+    """
+    Roster visits Panel shows for this date that the engine should process:
+    UNALLOCATED + ALLOCATED client visits with a schedule slot.
+    CANCELLED and ad-hoc (no client_schedule_id) are excluded.
+    """
+    rows = _exec(
+        db,
+        """
+        SELECT rv.id, rv.receiver_type, rv.receiver_client_id, rv.provider_user_id,
+               rv.client_schedule_id, COALESCE(rv.slot_index, 0) AS slot_index,
+               rv.start_minute, rv.end_minute, rv.window_end_offset_days,
+               rv.status, rv.pinned,
+               rv.pending_window_start_minute, rv.pending_window_end_minute,
+               rv.pending_min_duration
+        FROM roster_visit rv
+        JOIN roster r ON r.id = rv.roster_id
+        WHERE r.date = :date
+          AND rv.status IN ('UNALLOCATED', 'ALLOCATED')
+          AND rv.receiver_type = 'CLIENT'
+          AND rv.client_schedule_id IS NOT NULL
+          AND rv.receiver_client_id IS NOT NULL
+        ORDER BY rv.client_schedule_id, rv.slot_index, rv.id
+        """,
+        {"date": target.isoformat()},
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def load_clients_by_ids(db: Session, client_ids: list[int]) -> list[dict[str, Any]]:
+    if not client_ids:
+        return []
+    rows = _exec(
+        db,
+        """
+        SELECT id, name, lastname, gender, latitude, longitude,
+               extended_feasibility, status, not_send_to_engine
+        FROM client
+        WHERE id IN :ids
+          AND status = 'Active'
+          AND not_send_to_engine = false
+        ORDER BY id
+        """,
+        {"ids": client_ids},
+        expanding=["ids"],
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def load_client_schedules_by_ids(db: Session, schedule_ids: list[int]) -> list[dict[str, Any]]:
+    """Load specific client_schedules (same shape as load_client_schedules)."""
+    if not schedule_ids:
+        return []
+    rows = _exec(
+        db,
+        """
+        SELECT cs.id, cs.client_id, cs.days, cs.requested_start_time, cs.requested_end_time,
+               cs.end_time_date_offset_days, cs.requested_duration, cs.start_date, cs.end_date,
+               cs.occurs_every, cs.deleted_at,
+               csp.id AS pref_id, csp.window_start, csp.window_end, csp.min_duration,
+               csp.not_send_to_engine AS pref_not_send,
+               csp.is_temporary, csp.is_unavailability, csp.effective_date_from,
+               csp.effective_date_to, csp.source_schedule_id
+        FROM client_schedules cs
+        LEFT JOIN client_schedule_preferences csp ON csp.client_schedule_id = cs.id
+        WHERE cs.id IN :ids
+          AND cs.deleted_at IS NULL
+          AND (csp.id IS NULL OR csp.not_send_to_engine = false)
+          AND (csp.id IS NULL OR csp.is_suspend = false)
+        ORDER BY cs.client_id, cs.id
+        """,
+        {"ids": schedule_ids},
+        expanding=["ids"],
+    ).mappings().all()
+
+    schedule_id_list = [int(r["id"]) for r in rows]
+    exceptions_by_schedule: dict[int, list[date]] = {sid: [] for sid in schedule_id_list}
+    if schedule_id_list:
+        ex_rows = _exec(
+            db,
+            """
+            SELECT client_schedule_id, exception_date
+            FROM client_schedule_exceptions
+            WHERE client_schedule_id IN :ids
+            """,
+            {"ids": schedule_id_list},
+            expanding=["ids"],
+        ).mappings().all()
+        for ex in ex_rows:
+            sid = int(ex["client_schedule_id"])
+            d = _as_date(ex["exception_date"])
+            if d:
+                exceptions_by_schedule.setdefault(sid, []).append(d)
+
+    only_by_pref: dict[int, list[int]] = {}
+    must_by_pref: dict[int, list[int]] = {}
+    dislike_by_pref: dict[int, list[int]] = {}
+    pref_ids = [int(r["pref_id"]) for r in rows if r["pref_id"] is not None]
+    if pref_ids:
+        for table, bucket in (
+            ("client_schedule_preferences_only_users", only_by_pref),
+            ("client_schedule_preferences_must_users", must_by_pref),
+        ):
+            link_rows = _exec(
+                db,
+                f"""
+                SELECT preferences_id, user_availability_id
+                FROM {table}
+                WHERE preferences_id IN :ids AND disabled = false
+                """,
+                {"ids": pref_ids},
+                expanding=["ids"],
+            ).mappings().all()
+            for link in link_rows:
+                bucket.setdefault(int(link["preferences_id"]), []).append(
+                    int(link["user_availability_id"])
+                )
+        dislike_rows = _exec(
+            db,
+            """
+            SELECT preferences_id, user_id
+            FROM client_schedule_preferences_disliked_users
+            WHERE preferences_id IN :ids AND disabled = false
+            """,
+            {"ids": pref_ids},
+            expanding=["ids"],
+        ).mappings().all()
+        for link in dislike_rows:
+            dislike_by_pref.setdefault(int(link["preferences_id"]), []).append(int(link["user_id"]))
+
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        prefs = None
+        if r["pref_id"] is not None:
+            pid = int(r["pref_id"])
+            prefs = {
+                "id": pid,
+                "window_start": _as_time_str(r["window_start"]),
+                "window_end": _as_time_str(r["window_end"]),
+                "min_duration": r["min_duration"],
+                "not_send_to_engine": r["pref_not_send"],
+                "is_temporary": bool(r["is_temporary"]),
+                "is_unavailability": bool(r["is_unavailability"]),
+                "effective_date_from": _as_date(r["effective_date_from"]),
+                "effective_date_to": _as_date(r["effective_date_to"]),
+                "source_schedule_id": (
+                    int(r["source_schedule_id"]) if r["source_schedule_id"] is not None else None
+                ),
+                "only_user_availability_ids": only_by_pref.get(pid, []),
+                "must_user_availability_ids": must_by_pref.get(pid, []),
+                "dislike_user_ids": dislike_by_pref.get(pid, []),
+            }
+        result.append(
+            {
+                "id": int(r["id"]),
+                "client_id": int(r["client_id"]),
+                "days": _as_day_list(r["days"]),
+                "requested_start_time": _as_time_str(r["requested_start_time"]),
+                "requested_end_time": _as_time_str(r["requested_end_time"]),
+                "end_time_date_offset_days": int(r["end_time_date_offset_days"] or 0),
+                "requested_duration": r["requested_duration"],
+                "start_date": _as_date(r["start_date"]),
+                "end_date": _as_date(r["end_date"]),
+                "occurs_every": r["occurs_every"] or 1,
+                "preferences": prefs,
+                "exceptions": exceptions_by_schedule.get(int(r["id"]), []),
+            }
+        )
+    return result
 
 
 def load_roster_visits(db: Session, target: date) -> list[dict[str, Any]]:

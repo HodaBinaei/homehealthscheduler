@@ -177,8 +177,8 @@ def build_users_output(
             sets = ensure(uid)
             sets["dislike_set"] = unique_sorted(sets["dislike_set"] + prids)
 
-    # Schedule-level links
-    for sched in client_bundle.get("schedules") or []:
+    # Schedule-level links — only schedules that apply on target date
+    for sched in client_bundle.get("applicable_schedules") or client_bundle.get("schedules") or []:
         prefs = sched.get("preferences") or {}
         if not prefs:
             continue

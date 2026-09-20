@@ -51,6 +51,54 @@ def test_a3_b4_exception_excludes_original_day():
     assert find_schedule_occurrence_covering_date(sched, monday) is None
 
 
+def test_empty_days_never_match_any_weekday():
+    """Schedules with missing/empty days must not appear on every date (map/unallocated leak)."""
+    from app.services.payload.schedule_rules import resolve_schedule_visit_window
+
+    monday = date(2026, 9, 14)
+    tuesday = date(2026, 9, 15)
+    for empty_days in ([], None):
+        sched = _base_schedule(days=empty_days)
+        assert find_schedule_occurrence_covering_date(sched, monday) is None
+        assert find_schedule_occurrence_covering_date(sched, tuesday) is None
+        assert resolve_schedule_visit_window(sched, monday) is None
+
+
+def test_wrong_weekday_schedule_excluded_from_target_date():
+    from app.services.payload.schedule_rules import resolve_schedule_visit_window
+
+    monday = date(2026, 9, 14)
+    tuesday = date(2026, 9, 15)
+    monday_only = _base_schedule(days=["Monday"])
+    assert find_schedule_occurrence_covering_date(monday_only, monday) == monday
+    assert find_schedule_occurrence_covering_date(monday_only, tuesday) is None
+    assert resolve_schedule_visit_window(monday_only, tuesday) is None
+
+
+def test_day_name_match_is_case_insensitive():
+    monday = date(2026, 9, 14)
+    sched = _base_schedule(days=["monday"])
+    assert find_schedule_occurrence_covering_date(sched, monday) == monday
+
+
+def test_empty_days_availability_never_matches():
+    from app.services.payload.schedule_rules import find_availability_occurrence
+
+    thursday = date(2026, 9, 17)
+    avail = {
+        "days": [],
+        "start_time": "08:00",
+        "end_time": "16:00",
+        "end_time_date_offset_days": 0,
+        "start_date": date(2026, 1, 1),
+        "end_date": None,
+        "occurs_every": 1,
+        "exceptions": [],
+        "preferences": {},
+    }
+    assert find_availability_occurrence(avail, thursday) is None
+
+
 def test_a3_b4_temporary_override_appears_on_target_day():
     tuesday = date(2026, 9, 15)
     temp = _base_schedule(

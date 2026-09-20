@@ -18,12 +18,15 @@ from app.services.payload.constants import (
 from app.services.payload import queries
 from app.services.payload.schedule_rules import (
     find_schedule_occurrence_covering_date,
-    resolve_schedule_flexibility_window,
     resolve_schedule_visit_window,
 )
 from app.services.payload.time_utils import (
     add_days,
+    build_absolute_window,
+    clip_absolute_window_to_date,
     day_name_from_date,
+    is_valid_minute_window,
+    minute_to_hhmm,
     normalize_engine_time_window,
 )
 from app.services.payload.window_helpers import (
@@ -44,114 +47,183 @@ def _map_gender(gender: str | None) -> str:
     return GENDER_MAP.get(gender, "MALE")
 
 
+def _visit_day_window(visit: dict[str, Any], target: date) -> tuple[int, int] | None:
+    """Clip the roster visit's absolute window onto the target calendar day."""
+    offset = max(0, int(visit.get("window_end_offset_days") or 0))
+    absolute = build_absolute_window(
+        target,
+        minute_to_hhmm(int(visit["start_minute"])),
+        minute_to_hhmm(int(visit["end_minute"])),
+        offset,
+    )
+    clipped = clip_absolute_window_to_date(absolute, target)
+    if not clipped or not is_valid_minute_window(clipped[0], clipped[1]):
+        return None
+    return clipped
+
+
+def _flexibility_window(
+    visit: dict[str, Any],
+    schedule: dict[str, Any] | None,
+    requested: tuple[int, int],
+) -> tuple[int, int]:
+    pending_start = visit.get("pending_window_start_minute")
+    pending_end = visit.get("pending_window_end_minute")
+    if pending_start is not None and pending_end is not None:
+        start, end = int(pending_start), int(pending_end)
+        if is_valid_minute_window(start, end):
+            return start, end
+
+    prefs = (schedule or {}).get("preferences") or {}
+    if prefs.get("window_start") or prefs.get("window_end"):
+        from app.services.payload.time_utils import format_hhmm, to_minutes_hhmm
+
+        start = (
+            to_minutes_hhmm(format_hhmm(prefs.get("window_start")))
+            if prefs.get("window_start")
+            else requested[0]
+        )
+        end = (
+            to_minutes_hhmm(format_hhmm(prefs.get("window_end")))
+            if prefs.get("window_end")
+            else requested[1]
+        )
+        if is_valid_minute_window(start, end):
+            return start, end
+    return requested
+
+
 def collect_client_export_records(db: Session, target: date) -> dict[str, Any]:
-    clients = queries.load_active_clients(db)
-    client_ids = [int(c["id"]) for c in clients]
-    schedules = queries.load_client_schedules(db, client_ids)
-    cancelled = queries.load_cancelled_slot_keys(db, target)
+    """
+    Build engine patients from roster visits for the API date only.
 
-    applicable: list[dict[str, Any]] = []
-    for sched in schedules:
-        if find_schedule_occurrence_covering_date(sched, target) is not None:
-            applicable.append(sched)
+    Source of truth matches Panel map/unallocated: UNALLOCATED + ALLOCATED
+    client visits on roster.date = target (CANCELLED / other days excluded).
+    """
+    visits = queries.load_day_engine_visits(db, target)
+    if not visits:
+        return {
+            "entries": [],
+            "schedules": [],
+            "applicable_schedules": [],
+            "visits": [],
+            "target_date": target,
+            "day_of_week": day_name_from_date(target),
+        }
 
-    suppressed_sources: set[int] = set()
-    for sched in applicable:
-        prefs = sched.get("preferences") or {}
-        source_id = prefs.get("source_schedule_id")
-        if prefs.get("is_temporary") and source_id is not None:
-            suppressed_sources.add(int(source_id))
-    export_schedules = [s for s in applicable if s["id"] not in suppressed_sources]
-
-    by_client: dict[int, list[dict[str, Any]]] = {}
-    for sched in export_schedules:
-        by_client.setdefault(int(sched["client_id"]), []).append(sched)
-
+    client_ids = sorted({int(v["receiver_client_id"]) for v in visits})
+    schedule_ids = sorted({int(v["client_schedule_id"]) for v in visits})
+    clients = queries.load_clients_by_ids(db, client_ids)
+    schedules = queries.load_client_schedules_by_ids(db, schedule_ids)
     client_map = {int(c["id"]): c for c in clients}
+    schedule_map = {int(s["id"]): s for s in schedules}
+
     entries: list[dict[str, Any]] = []
     incremental_key = 1
     prid = 1
+    applicable_schedules: list[dict[str, Any]] = []
+    seen_schedule_ids: set[int] = set()
 
-    for client_id, client_schedules in by_client.items():
+    for visit in visits:
+        client_id = int(visit["receiver_client_id"])
         client = client_map.get(client_id)
         if not client:
+            logger.warning(
+                "Skipping visit %s: client %s inactive or not_send_to_engine",
+                visit.get("id"),
+                client_id,
+            )
             continue
-        for sched in client_schedules:
-            flex = resolve_schedule_flexibility_window(sched, target)
-            if not flex:
-                continue
-            effective_start, effective_end = normalize_engine_time_window(flex[0], flex[1])
-            if effective_end <= effective_start:
-                continue
 
-            requested = resolve_schedule_visit_window(sched, target)
-            if not requested:
-                continue
-            req_start, req_end = normalize_engine_time_window(requested[0], requested[1])
+        schedule_id = int(visit["client_schedule_id"])
+        schedule = schedule_map.get(schedule_id)
+        slot_index = int(visit.get("slot_index") or 0)
 
-            segment_duration = effective_end - effective_start
-            schedule_requested = sched.get("requested_duration")
-            requested_duration = (
-                int(schedule_requested) if schedule_requested is not None else segment_duration
+        requested = _visit_day_window(visit, target)
+        if not requested:
+            logger.warning(
+                "Skipping visit %s: window does not cover date %s",
+                visit.get("id"),
+                target.isoformat(),
             )
-            duration = min(requested_duration, segment_duration)
-            prefs = sched.get("preferences") or {}
-            raw_min = prefs.get("min_duration")
-            min_duration = floor_min_duration(
-                duration,
-                int(raw_min) if raw_min is not None else None,
-                MIN_DURATION_FLOOR_RATIO,
-            )
+            continue
 
-            availability_id = (
-                int(prefs["source_schedule_id"])
-                if prefs.get("is_temporary") and prefs.get("source_schedule_id") is not None
-                else int(sched["id"])
-            )
-            if f"{availability_id}:0" in cancelled:
-                continue
+        flex = _flexibility_window(visit, schedule, requested)
+        effective_start, effective_end = normalize_engine_time_window(flex[0], flex[1])
+        if effective_end <= effective_start:
+            continue
+        req_start, req_end = normalize_engine_time_window(requested[0], requested[1])
 
-            entry = {
-                "pid": client_id,
-                "prid": prid,
-                "first_name": client["name"],
-                "last_name": client.get("lastname") or "",
-                "start_time": effective_start,
-                "end_time": effective_end,
+        segment_duration = effective_end - effective_start
+        schedule_requested = schedule.get("requested_duration") if schedule else None
+        requested_duration = (
+            int(schedule_requested) if schedule_requested is not None else segment_duration
+        )
+        duration = min(requested_duration, segment_duration)
+
+        prefs = (schedule or {}).get("preferences") or {}
+        pending_min = visit.get("pending_min_duration")
+        raw_min = pending_min if pending_min is not None else prefs.get("min_duration")
+        min_duration = floor_min_duration(
+            duration,
+            int(raw_min) if raw_min is not None else None,
+            MIN_DURATION_FLOOR_RATIO,
+        )
+
+        # Temps map under source id so PRIDs match Panel ingest keys.
+        availability_id = (
+            int(prefs["source_schedule_id"])
+            if prefs.get("is_temporary") and prefs.get("source_schedule_id") is not None
+            else schedule_id
+        )
+
+        entry = {
+            "pid": client_id,
+            "prid": prid,
+            "first_name": client["name"],
+            "last_name": client.get("lastname") or "",
+            "start_time": effective_start,
+            "end_time": effective_end,
+            "requested_start_time": req_start,
+            "requested_end_time": req_end,
+            "requested_duration": requested_duration,
+            "duration": duration,
+            "min_duration": min_duration,
+            "gender": _map_gender(client.get("gender")),
+            "match_request": [],
+            "fix_window": 0,
+            "latitude": client.get("latitude"),
+            "longitude": client.get("longitude"),
+            "history_start": effective_start,
+            "history_end": effective_end,
+            "extendedFeasibility": bool(client.get("extended_feasibility")),
+            "do_extend_feasiblity": bool(client.get("extended_feasibility")),
+        }
+        entries.append(
+            {
+                "key": str(incremental_key),
+                "entry": entry,
+                "availability_id": availability_id,
+                "slot_index": slot_index,
                 "requested_start_time": req_start,
                 "requested_end_time": req_end,
                 "requested_duration": requested_duration,
-                "duration": duration,
-                "min_duration": min_duration,
-                "gender": _map_gender(client.get("gender")),
-                "match_request": [],
-                "fix_window": 0,
-                "latitude": client.get("latitude"),
-                "longitude": client.get("longitude"),
-                "history_start": effective_start,
-                "history_end": effective_end,
-                "extendedFeasibility": bool(client.get("extended_feasibility")),
-                "do_extend_feasiblity": bool(client.get("extended_feasibility")),
+                "segment_group": None,
+                "schedule": schedule,
+                "visit": visit,
             }
-            entries.append(
-                {
-                    "key": str(incremental_key),
-                    "entry": entry,
-                    "availability_id": availability_id,
-                    "slot_index": 0,
-                    "requested_start_time": req_start,
-                    "requested_end_time": req_end,
-                    "requested_duration": requested_duration,
-                    "segment_group": None,
-                    "schedule": sched,
-                }
-            )
-            incremental_key += 1
-            prid += 1
+        )
+        if schedule is not None and schedule_id not in seen_schedule_ids:
+            seen_schedule_ids.add(schedule_id)
+            applicable_schedules.append(schedule)
+        incremental_key += 1
+        prid += 1
 
     return {
         "entries": entries,
         "schedules": schedules,
+        "applicable_schedules": applicable_schedules,
+        "visits": visits,
         "target_date": target,
         "day_of_week": day_name_from_date(target),
     }
@@ -266,7 +338,7 @@ def build_clients_output(db: Session, target: date) -> tuple[dict[str, dict[str,
     provisional = {pid: MINUTES_IN_DAY * 2 for pid in by_pid}
     apply_client_sequencing(provisional)
 
-    # 5 overnight extension
+    # 5 overnight extension (next-day schedule windows for end-of-day patients)
     next_date = add_days(target, 1)
     next_applicable = [
         s for s in schedules if find_schedule_occurrence_covering_date(s, next_date) is not None
@@ -305,13 +377,6 @@ def build_clients_output(db: Session, target: date) -> tuple[dict[str, dict[str,
             MINUTES_IN_DAY + ext if ext > 0 else CLIENT_EXPORT_END_OF_DAY_EXTEND_THRESHOLD
         )
 
-    day_max_by_pid: dict[int, int] = {}
-    for pid in by_pid:
-        ext = extension_by_client.get(pid, 0)
-        day_max_by_pid[pid] = (
-            MINUTES_IN_DAY + ext if ext > 0 else CLIENT_EXPORT_END_OF_DAY_EXTEND_THRESHOLD
-        )
-
     for r in entries:
         e = r["entry"]
         day_max = day_max_by_pid[e["pid"]]
@@ -320,8 +385,6 @@ def build_clients_output(db: Session, target: date) -> tuple[dict[str, dict[str,
 
         if e["start_time"] < 0 or e["end_time"] > day_max or span > day_max:
             if min_span > day_max:
-                # Duration+slack cannot fit the day bound; use the full day window
-                # and shrink duration so later sequencing can still place it.
                 logger.warning(
                     "Patient prid=%s duration+slack=%s exceeds day_max=%s; clamping to full day",
                     e["prid"],
