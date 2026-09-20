@@ -8,6 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
+COPY hhs.py ./hhs.py
 COPY app ./app
 
 EXPOSE 8000
