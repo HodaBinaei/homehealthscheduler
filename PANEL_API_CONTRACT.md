@@ -39,3 +39,30 @@ Success: `202` `{ status, date, job_id, job_type, run_id }`.
 ```
 
 `progress_percent` is `0–100` (stage-based from engine-service). May be `null` on older workers.
+
+## Job logs
+
+### HTTP backlog
+
+`GET /api-data/v1/jobs/{job_id}/logs?after={seq}` proxies engine-service:
+
+```json
+{
+  "lines": [{ "seq": 1, "line": "Job queued (type=full-assignment)", "ts": "..." }],
+  "nextSeq": 1
+}
+```
+
+### Live WebSocket
+
+`WS /api-data/v1/jobs/{job_id}/logs/ws` — same `X-API-Key` (header) or `?api_key=` query.
+
+Upstream is engine-service `WS …/engine-api/api/v1/jobs/{job_id}/logs/ws`. Frames are forwarded as-is:
+
+```json
+{ "type": "log", "jobId": "...", "seq": 1, "line": "...", "ts": "..." }
+{ "type": "status", "jobId": "...", "status": "running", "progressPercent": 5, "progressMessage": "running" }
+{ "type": "done", "jobId": "...", "status": "completed" }
+```
+
+Deploy proxies must allow WebSocket upgrade on this path.

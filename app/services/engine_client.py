@@ -168,6 +168,31 @@ async def get_job(settings: Settings, job_id: str) -> dict[str, Any]:
     return body
 
 
+async def get_job_logs(settings: Settings, job_id: str, after: int = 0) -> dict[str, Any]:
+    """Async GET of engine-service job log backlog."""
+    url = f"{settings.engine_job_logs_url(job_id)}?after={int(after)}"
+    try:
+        async with httpx.AsyncClient(timeout=settings.engine_timeout_seconds) as client:
+            response = await client.get(url, headers=_engine_headers(settings))
+    except httpx.HTTPError as exc:
+        logger.error("Engine get_job_logs failed: %s", exc)
+        raise ConnectionError(f"Engine get_job_logs request failed: {exc}") from exc
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"raw": response.text}
+
+    if response.status_code == 404:
+        raise LookupError("Job not found")
+    if response.status_code >= 400:
+        detail = json.dumps(body) if isinstance(body, dict) else str(body)
+        raise RuntimeError(f"Engine get_job_logs failed ({response.status_code}): {detail}")
+    if not isinstance(body, dict):
+        raise RuntimeError(f"Engine get_job_logs returned non-object: {body}")
+    return body
+
+
 # Convenience wrappers
 def submit_full_assignment_sync(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
     return submit_scheduler_job_sync(settings, "full-assignment", payload)

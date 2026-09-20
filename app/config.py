@@ -74,6 +74,19 @@ class Settings(BaseSettings):
     def engine_job_url(self, job_id: str) -> str:
         return f"{self.resolved_engine_base_url()}/engine-api/api/v1/jobs/{job_id}"
 
+    def engine_job_logs_url(self, job_id: str) -> str:
+        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/jobs/{job_id}/logs"
+
+    def engine_job_logs_ws_url(self, job_id: str) -> str:
+        base = self.resolved_engine_base_url()
+        if base.startswith("https://"):
+            ws_base = "wss://" + base[len("https://") :]
+        elif base.startswith("http://"):
+            ws_base = "ws://" + base[len("http://") :]
+        else:
+            ws_base = f"ws://{base}"
+        return f"{ws_base}/engine-api/api/v1/jobs/{job_id}/logs/ws"
+
 
 @lru_cache
 def get_settings() -> Settings:

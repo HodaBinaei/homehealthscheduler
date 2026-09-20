@@ -19,7 +19,8 @@ Panel contract (what the server should send): see **[PANEL_API_CONTRACT.md](./PA
 2. The bridge loads carers, calls, feasible pairs, distances (and for optimize, current roster allocations) from the **same PostgreSQL** as the Panel server. Multi-schedule then **filters** to the selected visits (→ prids) and caregivers.
 3. It adapts the payload to engine-service DTOs, uploads to **S3** (if configured), and `POST`s to `{ENGINE_BASE_URL}/engine-api/api/v1/scheduler/...` with `ENGINE_API_KEY`.
 4. Response is **202** with `job_id`. Poll `GET /api-data/v1/jobs/{job_id}` (proxied to engine-service).
-5. Run metadata (+ S3 key) are stored in `hhs_engine_runs` (`token` = engine `job_id`).
+5. Live logs: `WS /api-data/v1/jobs/{job_id}/logs/ws` (and HTTP `GET …/logs?after=`) proxy engine-service log stream — Panel relays these to FE `/roster-engine` as `engine.log`.
+6. Run metadata (+ S3 key) are stored in `hhs_engine_runs` (`token` = engine `job_id`).
 
 `hour` is accepted and validated (`0–23`) but **unused for payload build in v1**.
 
