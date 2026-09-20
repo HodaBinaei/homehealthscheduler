@@ -169,6 +169,7 @@ def to_wire_patient(
         "pid": pid,
         "prid": str(patient["prid"]),
         "gender": _map_gender(patient.get("gender")),
+        "gender_preference": 3,  # BOTH — temporary default until DB preference is wired
         "location_id": pid,
         "location": {
             "latitude": float(patient["latitude"]),
@@ -199,6 +200,7 @@ def to_wire_caregiver(entry: dict[str, Any]) -> dict[str, Any]:
         "cid": cid,
         "crid": str(entry["crid"]),
         "gender": _map_gender(entry.get("gender")),
+        "gender_preference": 3,  # BOTH — temporary default until DB preference is wired
         "travel_mode": _map_travel(entry.get("travel_method")),
         "location_id": cid,
         "location": {

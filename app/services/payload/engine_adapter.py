@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from hhs import (
+    MAXIMUM_DISTANCE_BETWEEN_LOCATIONS_KM,
+    MAXIMUM_TRAVEL_TIME_BETWEEN_LOCATIONS_MINUTES,
+)
+from app.services.payload.hhs_sanitize import sanitize_engine_request
+
 
 def reshape_distance_data(
     matrix: dict[str, dict[str, float | None]] | None,
@@ -15,6 +21,8 @@ def reshape_distance_data(
     distance = matrix.get("distance") or {}
     duration = matrix.get("duration") or {}
     distances: dict[str, dict[str, Any]] = {}
+    max_km = float(MAXIMUM_DISTANCE_BETWEEN_LOCATIONS_KM)
+    max_min = int(MAXIMUM_TRAVEL_TIME_BETWEEN_LOCATIONS_MINUTES)
 
     for key, km in distance.items():
         if km is None:
@@ -26,11 +34,13 @@ def reshape_distance_data(
         minutes = duration.get(key)
         if minutes is None:
             continue
+        km_f = max(0.0, min(max_km, float(km)))
+        min_i = max(0, min(max_min, int(minutes)))
         distances[str(key)] = {
             "from_location_id": str(from_id),
             "to_location_id": str(to_id),
-            "distance_km": float(km),
-            "distance_minute": int(minutes),
+            "distance_km": km_f,
+            "distance_minute": min_i,
         }
 
     return {"distances": distances}
@@ -39,7 +49,7 @@ def reshape_distance_data(
 def _common_people_and_distances(bundle: dict[str, Any]) -> dict[str, Any]:
     caregivers = bundle.get("caregivers") or {}
     patients = bundle.get("patients") or {}
-    return {
+    body = {
         "caregiver_dict": list(caregivers.values()),
         "patient_dict": list(patients.values()),
         "crid_prid_feasible_dict": list(bundle.get("crid_prid_feasible") or []),
@@ -47,6 +57,7 @@ def _common_people_and_distances(bundle: dict[str, Any]) -> dict[str, Any]:
         "cycling_data": reshape_distance_data(bundle.get("cycling_data")),
         "driving_data": reshape_distance_data(bundle.get("driving_data")),
     }
+    return sanitize_engine_request(body)
 
 
 def build_last_schedule_from_roster(bundle: dict[str, Any]) -> dict[str, Any]:
