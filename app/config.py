@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     log_payload: bool = True
-    engine_timeout_seconds: float = 120.0
+    engine_timeout_seconds: float = 3600.0
 
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None

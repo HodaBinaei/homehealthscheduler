@@ -120,7 +120,7 @@ Health: `GET /health`, `GET /health/db`.
 | `DB_HOST` / `DB_PORT` / `DB_USERNAME` / `DB_PASSWORD` / `DB_NAME` | Same DB as Panel |
 | `ENGINE_BASE_URL` | engine-service base URL (no path suffix) |
 | `ENGINE_API_KEY` | Sent to engine-service as `X-API-Key` |
-| `ENGINE_TIMEOUT_SECONDS` | HTTP timeout for engine calls (default `120`) |
+| `ENGINE_TIMEOUT_SECONDS` | HTTP timeout for engine calls (default `3600`) |
 | `LOG_PAYLOAD` | `true` logs full JSON sent to the engine |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` / `AWS_BUCKET_NAME` | S3 payload archive |
 | `S3_PAYLOAD_PREFIX` | Key prefix (default `hhs/engine-payloads`) |

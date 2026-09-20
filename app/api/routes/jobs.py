@@ -394,41 +394,33 @@ async def proxy_engine_job_logs_ws(
         extra_headers["X-API-Key"] = settings.engine_api_key
 
     logger.info(
-        "Proxying job logs WS bridge_token=%s engine_job_id=%s url=%s",
+        "Streaming job logs bridge_token=%s engine_job_id=%s ws=%s",
         bridge_token,
         engine_job_id,
         upstream_url,
     )
 
-    try:
+    async def _drain_client() -> None:
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            return
+
+    async def _proxy_upstream_ws() -> None:
         async with websockets.connect(
             upstream_url,
             additional_headers=extra_headers,
-            open_timeout=settings.engine_timeout_seconds,
+            open_timeout=5.0,
         ) as upstream:
-            async def client_to_upstream() -> None:
-                try:
-                    while True:
-                        await websocket.receive_text()
-                except WebSocketDisconnect:
-                    return
-
             async def upstream_to_client() -> None:
-                try:
-                    async for message in upstream:
-                        frame = _rewrite_upstream_frame(message, bridge_token)
-                        await websocket.send_text(frame)
-                except Exception:
-                    logger.exception(
-                        "Upstream log WS ended bridge_token=%s engine=%s",
-                        bridge_token,
-                        engine_job_id,
-                    )
-                    return
+                async for message in upstream:
+                    frame = _rewrite_upstream_frame(message, bridge_token)
+                    await websocket.send_text(frame)
 
             done, pending = await asyncio.wait(
                 [
-                    asyncio.create_task(client_to_upstream()),
+                    asyncio.create_task(_drain_client()),
                     asyncio.create_task(upstream_to_client()),
                 ],
                 return_when=asyncio.FIRST_COMPLETED,
@@ -436,20 +428,144 @@ async def proxy_engine_job_logs_ws(
             for task in pending:
                 task.cancel()
             for task in done:
-                try:
-                    task.result()
-                except Exception:
-                    logger.debug("WS proxy task ended job_id=%s", job_id, exc_info=True)
-    except LookupError:
-        await websocket.send_json({"type": "error", "message": "Job not found", "jobId": bridge_token})
-    except Exception as exc:
-        logger.exception("Job logs WS proxy failed job_id=%s", job_id)
-        try:
+                task.result()
+
+    async def _poll_http_logs(*, announce_fallback: bool) -> None:
+        """Stream engine logs via HTTP (works even when engine WS route is missing)."""
+        after = 0
+        if announce_fallback:
+            nonlocal_seq = bridge_log_seq + 1
             await websocket.send_json(
-                {"type": "error", "message": str(exc), "jobId": bridge_token}
+                {
+                    "type": "log",
+                    "jobId": bridge_token,
+                    "seq": nonlocal_seq,
+                    "line": "Streaming engine logs over HTTP (WebSocket unavailable)…",
+                    "ts": _now_iso(),
+                }
             )
-        except Exception:
+        terminal = {"completed", "failed"}
+        idle_rounds = 0
+        while True:
+            try:
+                body = await get_job(settings, engine_job_id)
+            except LookupError:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": "Engine job not found",
+                        "jobId": bridge_token,
+                    }
+                )
+                await websocket.send_json(
+                    {"type": "done", "jobId": bridge_token, "status": "failed"}
+                )
+                return
+            except Exception as exc:
+                logger.warning("HTTP log poll get_job failed: %s", exc)
+                await asyncio.sleep(2.0)
+                continue
+
+            status_value = str(body.get("status") or "")
+            progress_raw = body.get("progress_percent")
+            progress_percent = None
+            if progress_raw is not None and str(progress_raw).strip() != "":
+                try:
+                    progress_percent = int(float(progress_raw))
+                except (TypeError, ValueError):
+                    progress_percent = None
+            await websocket.send_json(
+                {
+                    "type": "status",
+                    "jobId": bridge_token,
+                    "status": status_value or "running",
+                    "progressPercent": progress_percent,
+                    "progressMessage": body.get("progress_message"),
+                }
+            )
+
+            try:
+                logs = await get_job_logs(settings, engine_job_id, after=after)
+            except Exception as exc:
+                logger.warning("HTTP log poll get_job_logs failed: %s", exc)
+                logs = {"lines": [], "nextSeq": after}
+
+            new_lines = list(logs.get("lines") or [])
+            for entry in new_lines:
+                seq = int(entry.get("seq") or 0)
+                after = max(after, seq)
+                await websocket.send_json(
+                    {
+                        "type": "log",
+                        "jobId": bridge_token,
+                        "seq": seq,
+                        "line": entry.get("line") or "",
+                        "ts": entry.get("ts") or _now_iso(),
+                    }
+                )
+            if logs.get("nextSeq") is not None:
+                after = max(after, int(logs["nextSeq"]))
+
+            if status_value in terminal:
+                await websocket.send_json(
+                    {
+                        "type": "done",
+                        "jobId": bridge_token,
+                        "status": status_value,
+                    }
+                )
+                return
+
+            idle_rounds = 0 if new_lines else idle_rounds + 1
+            # Poll faster while logs are flowing; back off slightly when idle.
+            sleep_s = 1.0 if new_lines or idle_rounds < 3 else 2.0
+            drain = asyncio.create_task(_drain_client())
+            try:
+                await asyncio.wait_for(asyncio.shield(drain), timeout=sleep_s)
+                return  # client disconnected
+            except asyncio.TimeoutError:
+                drain.cancel()
+                try:
+                    await drain
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    # Prefer live WS; on any failure (404 on current engine deploys) use HTTP poll.
+    try:
+        await _proxy_upstream_ws()
+    except LookupError:
+        await websocket.send_json(
+            {"type": "error", "message": "Job not found", "jobId": bridge_token}
+        )
+        await websocket.send_json(
+            {"type": "done", "jobId": bridge_token, "status": "failed"}
+        )
+    except Exception as exc:
+        logger.warning(
+            "Engine log WS failed (%s); using HTTP poll bridge_token=%s engine=%s",
+            exc,
+            bridge_token,
+            engine_job_id,
+        )
+        try:
+            await _poll_http_logs(announce_fallback=True)
+        except WebSocketDisconnect:
             pass
+        except Exception as poll_exc:
+            logger.exception("HTTP log poll failed job_id=%s", job_id)
+            try:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": f"Log stream failed: {poll_exc}",
+                        "jobId": bridge_token,
+                    }
+                )
+                await websocket.send_json(
+                    {"type": "done", "jobId": bridge_token, "status": "failed"}
+                )
+            except Exception:
+                pass
     finally:
         try:
             await websocket.close()
