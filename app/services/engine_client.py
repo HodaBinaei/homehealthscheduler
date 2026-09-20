@@ -199,6 +199,31 @@ async def get_job_logs(settings: Settings, job_id: str, after: int = 0) -> dict[
     return body
 
 
+async def cancel_job(settings: Settings, job_id: str) -> dict[str, Any]:
+    """Async POST to cancel an engine-service job."""
+    url = settings.engine_job_cancel_url(job_id)
+    try:
+        async with httpx.AsyncClient(timeout=settings.engine_timeout_seconds) as client:
+            response = await client.post(url, headers=_engine_headers(settings))
+    except httpx.HTTPError as exc:
+        logger.error("Engine cancel_job failed: %s", exc)
+        raise ConnectionError(f"Engine cancel_job request failed: {exc}") from exc
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"raw": response.text}
+
+    if response.status_code == 404:
+        raise LookupError("Job not found")
+    if response.status_code >= 400:
+        detail = json.dumps(body) if isinstance(body, dict) else str(body)
+        raise RuntimeError(f"Engine cancel_job failed ({response.status_code}): {detail}")
+    if not isinstance(body, dict):
+        raise RuntimeError(f"Engine cancel_job returned non-object: {body}")
+    return body
+
+
 # Convenience wrappers
 def submit_full_assignment_sync(settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
     return submit_scheduler_job_sync(settings, "full-assignment", payload)

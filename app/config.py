@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     def engine_job_url(self, job_id: str) -> str:
         return f"{self.resolved_engine_base_url()}/engine-api/api/v1/jobs/{job_id}"
 
+    def engine_job_cancel_url(self, job_id: str) -> str:
+        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/jobs/{job_id}/cancel"
+
     def engine_job_logs_url(self, job_id: str) -> str:
         return f"{self.resolved_engine_base_url()}/engine-api/api/v1/jobs/{job_id}/logs"
 

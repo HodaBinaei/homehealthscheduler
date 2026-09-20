@@ -16,8 +16,10 @@ from app.db.session import SessionLocal, get_db
 from app.schemas.request import EngineJobStatusResponse
 from app.services.engine_client import get_job, get_job_logs
 from app.services.runs_store import get_run_by_job_ref
+from app.services.stop_job import stop_bridge_job
 from app.services.submit_job import (
     STATUS_BUILDING,
+    STATUS_CANCELLED,
     STATUS_FAILED,
     STATUS_PENDING,
     STATUS_SUBMITTED,
@@ -47,6 +49,19 @@ def _local_status_payload(run: dict[str, Any], job_ref: str) -> dict[str, Any]:
             "completed_at": updated,
             "progress_percent": 0,
             "progress_message": "failed",
+        }
+    if status_raw == STATUS_CANCELLED:
+        return {
+            "job_id": str(run.get("token") or job_ref),
+            "job_type": job_type,
+            "status": "cancelled",
+            "result": None,
+            "error": run.get("error") or "Cancelled by user",
+            "created_at": created,
+            "started_at": updated,
+            "completed_at": updated,
+            "progress_percent": 0,
+            "progress_message": "cancelled",
         }
     if status_raw == STATUS_BUILDING:
         return {
@@ -172,7 +187,7 @@ async def get_engine_job(
     engine_job_id = run.get("engine_job_id")
     status_raw = (run.get("status") or "").upper()
 
-    if status_raw == STATUS_FAILED or not engine_job_id:
+    if status_raw == STATUS_FAILED or status_raw == STATUS_CANCELLED or not engine_job_id:
         return _to_response(_local_status_payload(run, job_id), job_id)
 
     try:
@@ -192,6 +207,36 @@ async def get_engine_job(
     body = {**body, "job_id": str(run.get("token") or job_id)}
     if not body.get("job_type") and run.get("job_type"):
         body["job_type"] = run["job_type"]
+    return _to_response(body, job_id)
+
+
+@router.post(
+    "/{job_id}/stop",
+    response_model=EngineJobStatusResponse,
+    dependencies=[Depends(require_api_key)],
+)
+async def stop_engine_job(
+    job_id: str,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> EngineJobStatusResponse:
+    """
+    Stop a bridge job and cancel the upstream engine job when present.
+
+    Marks `hhs_engine_runs` as CANCELLED so Panel unlocks the roster date.
+    """
+    try:
+        body = await stop_bridge_job(db=db, settings=settings, job_ref=job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ConnectionError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Job stop failed job_id=%s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
     return _to_response(body, job_id)
 
 
@@ -446,7 +491,7 @@ async def proxy_engine_job_logs_ws(
                     "ts": _now_iso(),
                 }
             )
-        terminal = {"completed", "failed"}
+        terminal = {"completed", "failed", "cancelled"}
         idle_rounds = 0
         while True:
             try:

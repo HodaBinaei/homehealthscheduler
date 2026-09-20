@@ -33,7 +33,7 @@ Payload build, S3 upload, and engine submit run in the background.
 {
   "job_id": "...",
   "job_type": "multicpsat",
-  "status": "queued|running|completed|failed",
+  "status": "queued|running|completed|failed|cancelled",
   "result": null,
   "error": null,
   "created_at": "...",
@@ -44,7 +44,20 @@ Payload build, S3 upload, and engine submit run in the background.
 }
 ```
 
-`progress_percent` is `0–100` (stage-based from engine-service). May be `null` on older workers.
+`progress_percent` is `0–100` from engine-service: climbs ~5–85% while
+solver logs stream, 90% while finalizing, **100% when `status=completed`**.
+May be `null` on older workers. Panel maps `completed` → SUCCESS + ready so
+roster ingest can run once the result payload is present.
+
+## Stop job
+
+`POST /api-data/v1/jobs/{job_id}/stop` cancels the bridge run and the upstream
+engine-service job (when `engine_job_id` is known). Returns the same status
+shape with `status: "cancelled"`. Idempotent if already cancelled.
+
+Panel: `POST /panel/v1/roster/:date/engine/stop` (in-flight for date) or
+`POST /panel/v1/roster/:date/engine/runs/:runId/stop`.
+Engine-service: `POST /engine-api/api/v1/jobs/{job_id}/cancel`.
 
 When `result` is a Schedule payload, the bridge also normalizes it for Panel:
 
