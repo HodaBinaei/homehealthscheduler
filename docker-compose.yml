@@ -3,12 +3,13 @@
 # Usage:
 #   docker compose up --build -d
 #
-# If Panel `server` is already up and you need container DNS
-# (BRIDGE_BASE_URL=http://homehealthscheduler-api:8000):
+# Panel reaches this container as http://homehealthscheduler-api:8000 only when
+# both share a Docker network. Join Panel's compose network (default name
+# server_default) via HHS_PANEL_NETWORK, or after start:
 #   docker network connect server_default homehealthscheduler-api
 #
 # Override via .env:
-#   HHS_HOST_PORT, HHS_DB_HOST, HHS_ENGINE_BASE_URL
+#   HHS_HOST_PORT, HHS_DB_HOST, HHS_ENGINE_BASE_URL, HHS_PANEL_NETWORK
 
 services:
   hhs-api:
@@ -27,6 +28,9 @@ services:
       - "${HHS_HOST_PORT:-8001}:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - panel
     restart: unless-stopped
     healthcheck:
       test:
@@ -40,3 +44,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+networks:
+  panel:
+    external: true
+    name: ${HHS_PANEL_NETWORK:-server_default}
