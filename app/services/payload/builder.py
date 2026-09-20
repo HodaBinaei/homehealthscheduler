@@ -32,8 +32,16 @@ def _load_roster_context(
 ) -> dict[str, Any]:
     prid_by_slot: dict[str, int] = {}
     for rec in client_bundle["entries"]:
-        key = f"{rec['availability_id']}:{rec['slot_index']}"
-        prid_by_slot[key] = rec["entry"]["prid"]
+        slot = int(rec["slot_index"])
+        prid = int(rec["entry"]["prid"])
+        # Canonical / temp-source key used by Panel ingest.
+        prid_by_slot[f"{rec['availability_id']}:{slot}"] = prid
+        # Also key by the raw visit schedule id so multicpsat visit→prid lookup
+        # works when the visit still points at a temporary amendment row.
+        visit = rec.get("visit") or {}
+        raw_schedule_id = visit.get("client_schedule_id")
+        if raw_schedule_id is not None:
+            prid_by_slot[f"{int(raw_schedule_id)}:{slot}"] = prid
 
     allocated: dict[int, list[int]] = {}
     pinned: dict[int, list[int]] = {}

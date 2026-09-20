@@ -90,6 +90,8 @@ def _local_status_payload(run: dict[str, Any], job_ref: str) -> dict[str, Any]:
 
 
 def _to_response(body: dict[str, Any], fallback_job_id: str) -> EngineJobStatusResponse:
+    from app.services.payload.panel_result import normalize_schedule_result_for_panel
+
     progress_raw = body.get("progress_percent")
     progress_percent: int | None = None
     if progress_raw is not None and str(progress_raw).strip() != "":
@@ -106,7 +108,7 @@ def _to_response(body: dict[str, Any], fallback_job_id: str) -> EngineJobStatusR
         job_id=str(body.get("job_id") or fallback_job_id),
         job_type=body.get("job_type"),
         status=body.get("status"),
-        result=body.get("result"),
+        result=normalize_schedule_result_for_panel(body.get("result")),
         error=body.get("error"),
         created_at=body.get("created_at"),
         started_at=body.get("started_at"),

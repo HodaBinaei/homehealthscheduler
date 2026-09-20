@@ -46,6 +46,26 @@ Payload build, S3 upload, and engine submit run in the background.
 
 `progress_percent` is `0–100` (stage-based from engine-service). May be `null` on older workers.
 
+When `result` is a Schedule payload, the bridge also normalizes it for Panel:
+
+- Coerces `cid` / `crid` / `prid` / list entries to integers
+- Adds Panel aliases alongside engine names:
+  - `assigned_prids` ↔ `assigned_prid_list`
+  - `unassigned_prids` ↔ `unassigned_prid_list`
+  - `removed_caregivers` ↔ `removed_crid_list`
+
+### PRID / CRID contract
+
+- **prid** — ephemeral patient-request index for one job payload. Assigned densely
+  `1…N` from that date’s UNALLOCATED+ALLOCATED roster visits
+  (`ORDER BY client_schedule_id, slot_index, id`). Temporary schedules export under
+  their `source_schedule_id`.
+- **crid** — ephemeral caregiver-request / availability-segment index for the same payload.
+- **cid** / **pid** — stable Panel user / client ids.
+
+Panel ingest must remap results with the same visit-based PRID enumeration (not a
+schedule-only export).
+
 ## Job logs
 
 ### HTTP backlog
