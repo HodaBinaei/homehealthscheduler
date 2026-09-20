@@ -3,12 +3,12 @@
 # Usage:
 #   docker compose up --build -d
 #
-# On EC2 with the Panel `server` stack, attach to its network so
-# app_backend can reach this container by name (not host.docker.internal):
-#   BRIDGE_BASE_URL=http://homehealthscheduler-api:8000
+# If Panel `server` is already up and you need container DNS
+# (BRIDGE_BASE_URL=http://homehealthscheduler-api:8000):
+#   docker network connect server_default homehealthscheduler-api
 #
 # Override via .env:
-#   HHS_HOST_PORT, HHS_DB_HOST, HHS_ENGINE_BASE_URL, PANEL_DOCKER_NETWORK
+#   HHS_HOST_PORT, HHS_DB_HOST, HHS_ENGINE_BASE_URL
 
 services:
   hhs-api:
@@ -19,7 +19,6 @@ services:
     env_file:
       - .env
     environment:
-      # Prefer explicit docker overrides; fall back to host-gateway for local Mac.
       DB_HOST: ${HHS_DB_HOST:-host.docker.internal}
       ENGINE_BASE_URL: ${HHS_ENGINE_BASE_URL:-http://host.docker.internal:8000}
       APP_HOST: 0.0.0.0
@@ -28,9 +27,6 @@ services:
       - "${HHS_HOST_PORT:-8001}:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    networks:
-      - default
-      - panel
     restart: unless-stopped
     healthcheck:
       test:
@@ -44,8 +40,3 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-
-networks:
-  panel:
-    external: true
-    name: ${PANEL_DOCKER_NETWORK:-server_default}

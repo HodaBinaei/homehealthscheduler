@@ -88,6 +88,9 @@ def submit_scheduler_job_sync(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Synchronous POST to an engine-service scheduler endpoint."""
+    from app.services.payload.travel_bounds import scrub_engine_distance_matrices
+
+    payload = scrub_engine_distance_matrices(dict(payload))
     url = _url_for_job_type(settings, job_type)
     body = json.dumps(payload, default=str)
     _log_outbound(settings, url, job_type, payload, body)
@@ -106,6 +109,9 @@ async def submit_scheduler_job(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Async POST to an engine-service scheduler endpoint."""
+    from app.services.payload.travel_bounds import scrub_engine_distance_matrices
+
+    payload = scrub_engine_distance_matrices(dict(payload))
     url = _url_for_job_type(settings, job_type)
     body = json.dumps(payload, default=str)
     _log_outbound(settings, url, job_type, payload, body)

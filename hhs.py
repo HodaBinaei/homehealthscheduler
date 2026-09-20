@@ -17,7 +17,7 @@ PATIENT_EARLEST_REQUEST_TIME = 0  # Earliest request time in minutes
 PATIENT_LATEST_REQUEST_TIME = (23 * 60 + 59) * 2  # Latest request time in minutes (10 PM)
 
 MAXIMUM_DISTANCE_BETWEEN_LOCATIONS_KM = 1000.0  # Maximum distance between locations in kilometers
-MAXIMUM_TRAVEL_TIME_BETWEEN_LOCATIONS_MINUTES = 10 * 60  # Maximum travel time between locations in minutes (4 hours)
+MAXIMUM_TRAVEL_TIME_BETWEEN_LOCATIONS_MINUTES = 10 * 60  # Maximum travel time between locations in minutes (10 hours)
 
 
 

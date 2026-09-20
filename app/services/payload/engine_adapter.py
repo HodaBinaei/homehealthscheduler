@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from hhs import (
-    MAXIMUM_DISTANCE_BETWEEN_LOCATIONS_KM,
-    MAXIMUM_TRAVEL_TIME_BETWEEN_LOCATIONS_MINUTES,
-)
 from app.services.payload.hhs_sanitize import sanitize_engine_request
+from app.services.payload.travel_bounds import (
+    clamp_distance_km,
+    clamp_travel_minutes,
+    coerce_travel_minutes,
+    scrub_engine_distance_matrices,
+)
 
 
 def reshape_distance_data(
@@ -21,8 +23,6 @@ def reshape_distance_data(
     distance = matrix.get("distance") or {}
     duration = matrix.get("duration") or {}
     distances: dict[str, dict[str, Any]] = {}
-    max_km = float(MAXIMUM_DISTANCE_BETWEEN_LOCATIONS_KM)
-    max_min = int(MAXIMUM_TRAVEL_TIME_BETWEEN_LOCATIONS_MINUTES)
 
     for key, km in distance.items():
         if km is None:
@@ -31,16 +31,17 @@ def reshape_distance_data(
         if len(parts) != 2:
             continue
         from_id, to_id = parts
+        # Prefer same-key duration; fall back to str(key) for int/str key mismatches.
         minutes = duration.get(key)
         if minutes is None:
+            minutes = duration.get(str(key))
+        if coerce_travel_minutes(minutes) is None:
             continue
-        km_f = max(0.0, min(max_km, float(km)))
-        min_i = max(0, min(max_min, int(minutes)))
         distances[str(key)] = {
             "from_location_id": str(from_id),
             "to_location_id": str(to_id),
-            "distance_km": km_f,
-            "distance_minute": min_i,
+            "distance_km": clamp_distance_km(km, default=0.0),
+            "distance_minute": clamp_travel_minutes(minutes, default=0),
         }
 
     return {"distances": distances}
@@ -57,7 +58,9 @@ def _common_people_and_distances(bundle: dict[str, Any]) -> dict[str, Any]:
         "cycling_data": reshape_distance_data(bundle.get("cycling_data")),
         "driving_data": reshape_distance_data(bundle.get("driving_data")),
     }
-    return sanitize_engine_request(body)
+    sanitized = sanitize_engine_request(body)
+    # Final hard scrub — never rely on a single clamp path.
+    return scrub_engine_distance_matrices(sanitized)
 
 
 def build_last_schedule_from_roster(bundle: dict[str, Any]) -> dict[str, Any]:

@@ -6,8 +6,6 @@ import logging
 from typing import Any
 
 from hhs import (
-    MAXIMUM_DISTANCE_BETWEEN_LOCATIONS_KM,
-    MAXIMUM_TRAVEL_TIME_BETWEEN_LOCATIONS_MINUTES,
     MINIMUM_SHIFT_DURATION,
     MINIMUM_SHIFT_START,
     MAXIMUM_SHIFT_END,
@@ -20,16 +18,23 @@ from hhs import (
     GenderPreference,
     Patient,
 )
+from app.services.payload.travel_bounds import (
+    MAX_DISTANCE_KM,
+    MAX_TRAVEL_MINUTES,
+    clamp_distance_km,
+    clamp_travel_minutes,
+    coerce_travel_minutes,
+)
 
 logger = logging.getLogger("hhs.sanitize")
 
-_MAX_TRAVEL = MAXIMUM_TRAVEL_TIME_BETWEEN_LOCATIONS_MINUTES  # 600
-_MAX_KM = MAXIMUM_DISTANCE_BETWEEN_LOCATIONS_KM  # 1000.0
+_MAX_TRAVEL = MAX_TRAVEL_MINUTES  # 600 — hard-coded via constants, not hhs import alone
+_MAX_KM = MAX_DISTANCE_KM  # 1000.0
 
 
 def _clamp_int(value: Any, lo: int, hi: int, default: int) -> int:
     try:
-        n = int(value)
+        n = int(float(value))
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, n))
@@ -222,11 +227,16 @@ def sanitize_distance_data(matrix: dict[str, Any] | None) -> dict[str, Any]:
             continue
         km_raw = item.get("distance_km")
         min_raw = item.get("distance_minute")
-        km = _clamp_float(km_raw, 0.0, _MAX_KM, 0.0)
-        minutes = _clamp_int(min_raw, 0, _MAX_TRAVEL, 0)
-        if km_raw is not None and float(km_raw) > _MAX_KM:
-            clamped += 1
-        if min_raw is not None and int(min_raw) > _MAX_TRAVEL:
+        km = clamp_distance_km(km_raw, default=0.0)
+        minutes = clamp_travel_minutes(min_raw, default=0)
+        raw_min = coerce_travel_minutes(min_raw)
+        if km_raw is not None:
+            try:
+                if float(km_raw) > _MAX_KM:
+                    clamped += 1
+            except (TypeError, ValueError):
+                pass
+        if raw_min is not None and raw_min > _MAX_TRAVEL:
             clamped += 1
         out[expected] = {
             "from_location_id": from_id,

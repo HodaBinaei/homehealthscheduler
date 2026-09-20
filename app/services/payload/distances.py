@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
 
@@ -10,6 +11,15 @@ from app.services.payload.schedule_rules import (
     find_availability_occurrence,
     find_schedule_occurrence_covering_date,
 )
+from app.services.payload.travel_bounds import (
+    MAX_DISTANCE_KM,
+    MAX_TRAVEL_MINUTES,
+    clamp_distance_km,
+    clamp_travel_minutes,
+    coerce_travel_minutes,
+)
+
+logger = logging.getLogger("hhs.distances")
 
 
 def populate_distance_matrix(
@@ -18,6 +28,7 @@ def populate_distance_matrix(
     distance: dict[str, float | None] = {}
     duration: dict[str, float | None] = {}
     n = len(entity_ids)
+    capped_durations = 0
 
     for entity_id in entity_ids:
         key = f"{entity_id}_{entity_id}"
@@ -31,11 +42,18 @@ def populate_distance_matrix(
         key1 = f"{from_id}_{to_id}"
         key2 = f"{to_id}_{from_id}"
         distance_km = (
-            round(td["distance_meters"] / 1000, 4)
+            clamp_distance_km(round(td["distance_meters"] / 1000, 4), default=0.0)
             if td["distance_meters"] is not None
             else None
         )
-        duration_minutes = td["duration_minutes"]
+        # Cap at load: DB often has 1440 (24h) for unreachable OSRM pairs.
+        raw_minutes = coerce_travel_minutes(td["duration_minutes"])
+        if raw_minutes is None:
+            duration_minutes: float | None = None
+        else:
+            if raw_minutes > MAX_TRAVEL_MINUTES:
+                capped_durations += 1
+            duration_minutes = float(clamp_travel_minutes(raw_minutes, default=0))
         if from_id != to_id:
             if key1 not in distance:
                 off_diagonal_filled += 1
@@ -45,6 +63,13 @@ def populate_distance_matrix(
         distance[key2] = distance_km
         duration[key1] = duration_minutes
         duration[key2] = duration_minutes
+    if capped_durations:
+        logger.warning(
+            "Capped %s travel_distances rows to max_minute=%s (max_km=%s)",
+            capped_durations,
+            MAX_TRAVEL_MINUTES,
+            MAX_DISTANCE_KM,
+        )
 
     expected = n * (n - 1)
     if off_diagonal_filled != expected:

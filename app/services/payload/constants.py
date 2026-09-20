@@ -18,6 +18,11 @@ CLIENT_EXPORT_END_OF_DAY_EXTEND_THRESHOLD = 1439  # 24*60 - 1
 MINUTES_IN_DAY = 1440
 DURATION_MINIMUM = 15
 
+# Must match hhs.DistanceItem bounds (worker validates with these).
+# DB/OSRM often stores 1440 (= 24h) as an unreachable/outlier travel time.
+ENGINE_MAX_TRAVEL_MINUTES = 600  # 10 hours
+ENGINE_MAX_DISTANCE_KM = 1000.0
+
 DAY_NAMES = [
     "Sunday",
     "Monday",
