@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -8,6 +7,7 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.config import Settings
+from app.services.payload.python_literal import format_payload_python
 
 logger = logging.getLogger("hhs.s3")
 
@@ -39,18 +39,19 @@ class S3PayloadStore:
 
     def build_key(self, roster_date: str, run_id: str) -> str:
         prefix = (self.settings.s3_payload_prefix or "hhs/engine-payloads").strip("/")
-        return f"{prefix}/{roster_date}/{run_id}.json"
+        # Python-literal file (None/True/False) to match offline optimizer inputs.
+        return f"{prefix}/{roster_date}/{run_id}.py"
 
     def upload_payload(self, key: str, payload: dict[str, Any]) -> str:
         if not self._client:
             raise RuntimeError("S3 is not configured")
-        body = json.dumps(payload, default=str).encode("utf-8")
+        body = format_payload_python(payload).encode("utf-8")
         try:
             self._client.put_object(
                 Bucket=self.settings.aws_bucket_name,
                 Key=key,
                 Body=body,
-                ContentType="application/json",
+                ContentType="text/x-python; charset=utf-8",
             )
         except (BotoCoreError, ClientError) as exc:
             logger.error("S3 upload failed for key=%s: %s", key, exc)

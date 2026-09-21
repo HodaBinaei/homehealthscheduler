@@ -116,14 +116,28 @@ def assemble_execute_records_with_roster(
             if p.get("latitude") is None or p.get("longitude") is None
         }
     )
-    if ungeocoded_cids or ungeocoded_pids:
-        raise ValueError(
-            "Engine payload requires latitude/longitude on every caregiver and client. "
-            f"ungeocodedCaregiverCids={ungeocoded_cids} ungeocodedClientPids={ungeocoded_pids}"
-        )
+    # Drop ungeocoded rows so wire conversion can proceed. Full-day jobs still
+    # fail later if any were dropped; multicpsat only fails when the selection
+    # includes them (see process_scheduler_job).
+    if ungeocoded_cids:
+        dropped = set(ungeocoded_cids)
+        users_output = {
+            key: entry
+            for key, entry in users_output.items()
+            if int(entry["cid"]) not in dropped
+        }
+    if ungeocoded_pids:
+        dropped = set(ungeocoded_pids)
+        clients_output = {
+            key: entry
+            for key, entry in clients_output.items()
+            if int(entry["pid"]) not in dropped
+        }
 
     crid_prid_feasible = build_crid_prid_feasible(db, users_output, clients_output, target)
     roster = _load_roster_context(db, target, client_bundle, preference_flags)
+    roster["ungeocoded_caregiver_cids"] = ungeocoded_cids
+    roster["ungeocoded_client_pids"] = ungeocoded_pids
 
     patient_sources: dict[int, dict[str, Any]] = {}
     for entry in clients_output.values():

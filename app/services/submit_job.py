@@ -41,6 +41,37 @@ STATUS_FAILED = "FAILED"
 STATUS_CANCELLED = "CANCELLED"
 
 
+def _geocode_error(cids: list[int], pids: list[int]) -> str:
+    return (
+        "Engine payload requires latitude/longitude on every caregiver and client "
+        "included in this job. Geocode them in Panel (user/client location) and retry. "
+        f"ungeocodedCaregiverCids={cids} ungeocodedClientPids={pids}"
+    )
+
+
+def _assert_selection_geocoded(
+    *,
+    roster: dict[str, Any],
+    provider_user_ids: list[int],
+    patient_pids: list[int] | None = None,
+) -> None:
+    dropped_cids = set(roster.get("ungeocoded_caregiver_cids") or [])
+    dropped_pids = set(roster.get("ungeocoded_client_pids") or [])
+    bad_cids = sorted({int(u) for u in provider_user_ids if int(u) in dropped_cids})
+    bad_pids = sorted(
+        {int(p) for p in (patient_pids or []) if int(p) in dropped_pids}
+    )
+    if bad_cids or bad_pids:
+        raise ValueError(_geocode_error(bad_cids, bad_pids))
+
+
+def _assert_full_day_geocoded(roster: dict[str, Any]) -> None:
+    cids = list(roster.get("ungeocoded_caregiver_cids") or [])
+    pids = list(roster.get("ungeocoded_client_pids") or [])
+    if cids or pids:
+        raise ValueError(_geocode_error(cids, pids))
+
+
 def accept_scheduler_job(
     *,
     job_type: str,
@@ -129,8 +160,8 @@ def process_scheduler_job(
         )
 
         bundle = build_day_bundle_for_engine(db, target)
+        roster = bundle.get("roster") or {}
         if job_type == "multicpsat":
-            roster = bundle.get("roster") or {}
             prid_by_slot = roster.get("prid_by_slot") or {}
             prids = resolve_prids_for_visit_ids(
                 db,
@@ -138,11 +169,30 @@ def process_scheduler_job(
                 list(visit_ids or []),
                 prid_by_slot=prid_by_slot,
             )
+            # Only fail geocode for carers the FE actually selected — not every
+            # ungeocoded caregiver who happens to be available that day.
+            _assert_selection_geocoded(
+                roster=roster,
+                provider_user_ids=list(provider_user_ids or []),
+            )
             bundle = filter_day_bundle_by_selection(
                 bundle,
                 provider_user_ids=list(provider_user_ids or []),
                 prids=prids,
             )
+            remaining_prids = {
+                int(pt["prid"]) for pt in (bundle.get("patients") or {}).values()
+            }
+            missing_prids = [p for p in prids if p not in remaining_prids]
+            dropped_pids = list(roster.get("ungeocoded_client_pids") or [])
+            if missing_prids and dropped_pids:
+                raise ValueError(
+                    _geocode_error([], sorted(int(p) for p in dropped_pids))
+                    + f" (selected visit prids missing after geocode drop: {missing_prids[:10]})"
+                )
+        else:
+            _assert_full_day_geocoded(roster)
+
         payload = adapter(bundle)
         caregiver_count = len(payload.get("caregiver_dict") or [])
         patient_count = len(payload.get("patient_dict") or [])

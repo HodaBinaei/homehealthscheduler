@@ -7,6 +7,8 @@ from typing import Any
 import httpx
 
 from app.config import Settings
+from app.services.payload.python_literal import format_payload_python
+from app.services.payload.travel_bounds import scrub_engine_distance_matrices
 
 logger = logging.getLogger("hhs.engine_client")
 
@@ -34,7 +36,8 @@ def _log_outbound(settings: Settings, url: str, job_type: str, payload: dict[str
         feasible_count,
     )
     if settings.log_payload:
-        logger.info("Engine %s payload:\n%s", job_type, json.dumps(payload, indent=2, default=str))
+        # Python literals (None/True/False) — matches offline optimizer day-files.
+        logger.info("Engine %s payload:\n%s", job_type, format_payload_python(payload))
     else:
         logger.info(
             "Engine %s payload summary: caregivers=%s patients=%s feasible=%s",
