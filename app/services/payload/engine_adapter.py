@@ -133,14 +133,15 @@ def build_last_schedule_from_roster(bundle: dict[str, Any]) -> dict[str, Any]:
 def to_full_assignment_request(bundle: dict[str, Any]) -> dict[str, Any]:
     body = _common_people_and_distances(bundle)
     body["data_day"] = str(bundle.get("date") or "")
-    body["config"] = None
+    # Engine pipelines treat config as a mapping (`x in config`); never send null.
+    body["config"] = {}
     body["save_result_schedule"] = False
     return body
 
 
 def to_multicpsat_request(bundle: dict[str, Any]) -> dict[str, Any]:
     body = _common_people_and_distances(bundle)
-    body["config"] = None
+    body["config"] = {}
     return body
 
 
@@ -154,6 +155,6 @@ def to_reschedule_request(
     body["data_name"] = str(bundle.get("date") or "")
     body["last_schedule_dict"] = last_schedule if last_schedule is not None else build_last_schedule_from_roster(bundle)
     body["rescheduling_meta_dict"] = rescheduling_meta if rescheduling_meta is not None else {}
-    body["config"] = None
+    body["config"] = {}
     body["save_result_schedule"] = False
     return body

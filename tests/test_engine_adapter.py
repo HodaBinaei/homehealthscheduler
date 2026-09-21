@@ -117,6 +117,7 @@ def test_multicpsat_has_no_day_field():
     assert "data_day" not in body
     assert "data_name" not in body
     assert len(body["caregiver_dict"]) == 1
+    assert body["config"] == {}
 
 
 def test_reschedule_includes_last_schedule():
