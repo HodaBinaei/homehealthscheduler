@@ -11,19 +11,18 @@ from app.services.submit_job import accept_scheduler_job, process_scheduler_job
 
 logger = logging.getLogger("hhs.optimize")
 
+# Primary path used by Panel BridgeEngineClient.
 router = APIRouter(prefix="/api-data/v1/optimize", tags=["optimize"])
+# Alias matching day-level "Optimize" wording / older docs.
+reschedule_alias_router = APIRouter(prefix="/api-data/v1/reschedule", tags=["optimize"])
+# Legacy paths from early INTEGRATION sketches (`/api/v1/...` without `api-data`).
+legacy_router = APIRouter(prefix="/api/v1/optimize", tags=["optimize"])
 
 
-@router.post(
-    "",
-    response_model=ScheduleJobResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_api_key)],
-)
-def create_optimize(
+def _accept_optimize(
     body: ScheduleExecuteRequest,
     background_tasks: BackgroundTasks,
-    settings: Settings = Depends(get_settings),
+    settings: Settings,
 ) -> ScheduleJobResponse:
     """Accept reschedule immediately; build + engine submit run in background."""
     try:
@@ -57,3 +56,66 @@ def create_optimize(
         job_type=accepted["job_type"],
         run_id=accepted["run_id"],
     )
+
+
+@router.post(
+    "/",
+    response_model=ScheduleJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_api_key)],
+)
+@router.post(
+    "",
+    response_model=ScheduleJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_api_key)],
+    include_in_schema=False,
+)
+def create_optimize(
+    body: ScheduleExecuteRequest,
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(get_settings),
+) -> ScheduleJobResponse:
+    return _accept_optimize(body, background_tasks, settings)
+
+
+@reschedule_alias_router.post(
+    "/",
+    response_model=ScheduleJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_api_key)],
+)
+@reschedule_alias_router.post(
+    "",
+    response_model=ScheduleJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_api_key)],
+    include_in_schema=False,
+)
+def create_optimize_reschedule_alias(
+    body: ScheduleExecuteRequest,
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(get_settings),
+) -> ScheduleJobResponse:
+    return _accept_optimize(body, background_tasks, settings)
+
+
+@legacy_router.post(
+    "/",
+    response_model=ScheduleJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_api_key)],
+)
+@legacy_router.post(
+    "",
+    response_model=ScheduleJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_api_key)],
+    include_in_schema=False,
+)
+def create_optimize_legacy(
+    body: ScheduleExecuteRequest,
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(get_settings),
+) -> ScheduleJobResponse:
+    return _accept_optimize(body, background_tasks, settings)

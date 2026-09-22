@@ -8,7 +8,11 @@ from sqlalchemy import text
 
 from app.api.routes.jobs import router as jobs_router
 from app.api.routes.multi_schedule import router as multi_schedule_router
-from app.api.routes.optimize import router as optimize_router
+from app.api.routes.optimize import (
+    legacy_router as optimize_legacy_router,
+    reschedule_alias_router,
+    router as optimize_router,
+)
 from app.api.routes.schedule import router as schedule_router
 from app.config import get_settings
 from app.db.session import engine
@@ -27,7 +31,21 @@ async def lifespan(_app: FastAPI):
         logging.getLogger("hhs").info("hhs_engine_runs table ready")
     except Exception:
         logging.getLogger("hhs").exception(
-            "Could not ensure hhs_engine_runs table (runs API may fail until DB is up)"
+            "Could not ensure hhs_engine_runs table at startup; "
+            "will retry on first job submit"
+        )
+    settings = get_settings()
+    engine_base = settings.resolved_engine_base_url()
+    bridge_self = f"http://127.0.0.1:{settings.app_port}"
+    bridge_self_alt = f"http://localhost:{settings.app_port}"
+    if engine_base.rstrip("/") in {bridge_self, bridge_self_alt}:
+        logging.getLogger("hhs").warning(
+            "ENGINE_BASE_URL=%s points at this bridge (APP_PORT=%s). "
+            "Schedule/Roster/Optimize submits will 404 on /engine-api/... — "
+            "set ENGINE_BASE_URL to the real engine-service host "
+            "(e.g. http://34.244.104.57/api-engine).",
+            engine_base,
+            settings.app_port,
         )
     yield
 
@@ -44,6 +62,8 @@ app = FastAPI(
 app.include_router(schedule_router)
 app.include_router(multi_schedule_router)
 app.include_router(optimize_router)
+app.include_router(reschedule_alias_router)
+app.include_router(optimize_legacy_router)
 app.include_router(jobs_router)
 
 

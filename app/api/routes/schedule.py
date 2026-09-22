@@ -26,10 +26,17 @@ router = APIRouter(prefix="/api-data/v1/schedule", tags=["schedule"])
 
 
 @router.post(
+    "/",
+    response_model=ScheduleJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_api_key)],
+)
+@router.post(
     "",
     response_model=ScheduleJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_api_key)],
+    include_in_schema=False,
 )
 def create_schedule(
     body: ScheduleExecuteRequest,

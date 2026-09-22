@@ -15,8 +15,14 @@ SELECT_COLS = """
     request_payload_s3_key, created_at, updated_at
 """
 
+_runs_table_ready = False
+
 
 def ensure_runs_table() -> None:
+    """Idempotent DDL for hhs_engine_runs. Safe to call on every request path."""
+    global _runs_table_ready
+    if _runs_table_ready:
+        return
     with engine.begin() as conn:
         conn.execute(
             text(
@@ -72,6 +78,7 @@ def ensure_runs_table() -> None:
             """,
         ):
             conn.execute(text(stmt))
+    _runs_table_ready = True
 
 
 def insert_run(
@@ -90,6 +97,7 @@ def insert_run(
     job_type: str | None = None,
     engine_job_id: str | None = None,
 ) -> dict[str, Any]:
+    ensure_runs_table()
     run_id = run_id or str(uuid.uuid4())
     db.execute(
         text(
@@ -154,6 +162,7 @@ def update_run(
     feasible_count: int | None = None,
     request_payload_s3_key: str | None = None,
 ) -> dict[str, Any] | None:
+    ensure_runs_table()
     fields: list[str] = ["updated_at = NOW()"]
     params: dict[str, Any] = {"id": run_id}
     if status is not None:
@@ -209,6 +218,7 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 
 
 def get_run_by_id(db: Session, run_id: str) -> dict[str, Any] | None:
+    ensure_runs_table()
     row = db.execute(
         text(
             f"""
@@ -270,6 +280,7 @@ def list_runs(
     roster_date: date | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
+    ensure_runs_table()
     limit = max(1, min(limit, 200))
     if roster_date is not None:
         rows = db.execute(

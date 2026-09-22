@@ -9,6 +9,7 @@ Panel (`server`) talks to this bridge with `X-API-Key: $BRIDGE_API_KEY`.
 | Multi-schedule (primary) | `POST /api-data/v1/multi-schedule` | `{ "date", "hour", "visitIds": UUID[], "providerUserIds": number[] }` |
 | Full-assignment (legacy / tools) | `POST /api-data/v1/schedule` | `{ "date", "hour" }` |
 | Reschedule (whole day) | `POST /api-data/v1/optimize` | `{ "date", "hour" }` |
+| Reschedule alias | `POST /api-data/v1/reschedule` | same |
 
 `date` and `hour` always come from the Panel request. Patients are loaded from
 `roster_visit` for that `roster.date` with status **UNALLOCATED** or **ALLOCATED**

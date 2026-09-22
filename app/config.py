@@ -42,6 +42,16 @@ class Settings(BaseSettings):
             return legacy
         return "http://localhost:8000"
 
+    def engine_api_root(self) -> str:
+        """
+        engine-service mounts scheduler routes under /engine-api.
+        If ENGINE_BASE_URL already ends with /engine-api, do not double-prefix.
+        """
+        base = self.resolved_engine_base_url()
+        if base.endswith("/engine-api"):
+            return base
+        return f"{base}/engine-api"
+
     @property
     def database_url(self) -> str:
         return (
@@ -60,35 +70,34 @@ class Settings(BaseSettings):
 
     @property
     def engine_full_assignment_url(self) -> str:
-        # engine-service mounts jobs under /engine-api (see engine-service/app/main.py)
-        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/scheduler/full-assignment"
+        return f"{self.engine_api_root()}/api/v1/scheduler/full-assignment"
 
     @property
     def engine_multicpsat_url(self) -> str:
-        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/scheduler/multicpsat"
+        return f"{self.engine_api_root()}/api/v1/scheduler/multicpsat"
 
     @property
     def engine_reschedule_url(self) -> str:
-        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/scheduler/reschedule"
+        return f"{self.engine_api_root()}/api/v1/scheduler/reschedule"
 
     def engine_job_url(self, job_id: str) -> str:
-        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/jobs/{job_id}"
+        return f"{self.engine_api_root()}/api/v1/jobs/{job_id}"
 
     def engine_job_cancel_url(self, job_id: str) -> str:
-        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/jobs/{job_id}/cancel"
+        return f"{self.engine_api_root()}/api/v1/jobs/{job_id}/cancel"
 
     def engine_job_logs_url(self, job_id: str) -> str:
-        return f"{self.resolved_engine_base_url()}/engine-api/api/v1/jobs/{job_id}/logs"
+        return f"{self.engine_api_root()}/api/v1/jobs/{job_id}/logs"
 
     def engine_job_logs_ws_url(self, job_id: str) -> str:
-        base = self.resolved_engine_base_url()
-        if base.startswith("https://"):
-            ws_base = "wss://" + base[len("https://") :]
-        elif base.startswith("http://"):
-            ws_base = "ws://" + base[len("http://") :]
+        root = self.engine_api_root()
+        if root.startswith("https://"):
+            ws_root = "wss://" + root[len("https://") :]
+        elif root.startswith("http://"):
+            ws_root = "ws://" + root[len("http://") :]
         else:
-            ws_base = f"ws://{base}"
-        return f"{ws_base}/engine-api/api/v1/jobs/{job_id}/logs/ws"
+            ws_root = f"ws://{root}"
+        return f"{ws_root}/api/v1/jobs/{job_id}/logs/ws"
 
 
 @lru_cache

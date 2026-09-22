@@ -21,7 +21,7 @@ services:
       - .env
     environment:
       DB_HOST: ${HHS_DB_HOST:-host.docker.internal}
-      ENGINE_BASE_URL: ${HHS_ENGINE_BASE_URL:-http://host.docker.internal:8000}
+      ENGINE_BASE_URL: ${HHS_ENGINE_BASE_URL:-http://34.244.104.57/api-engine}
       APP_HOST: 0.0.0.0
       APP_PORT: "8000"
     ports:
