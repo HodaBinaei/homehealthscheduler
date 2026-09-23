@@ -14,6 +14,7 @@ from app.services.payload.users import build_users_output
 from app.services.payload.window_helpers import (
     apply_roster_caregiver_specification,
     apply_roster_patient_specification,
+    scrub_dangling_match_requests,
 )
 from app.services.payload.wire_shape import (
     aggregate_request_window_priority,
@@ -219,6 +220,8 @@ def assemble_execute_records_with_roster(
     patients_flat = {
         k: v for k, v in patients_flat.items() if int(v["prid"]) not in cancelled
     }
+    # Engine rejects match_request IDs that are not in the patients list.
+    scrub_dangling_match_requests(patients_flat)
 
     crid_prid_feasible = fold_must_only_into_feasible(crid_prid_feasible, caregiver_specs)
 

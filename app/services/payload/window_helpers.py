@@ -12,6 +12,7 @@ from app.services.payload.constants import (
     MUST_SOURCE_HISTORICAL,
     PATIENT_SEQUENCE_GAP_MINUTES,
     ROSTER_MUST_VISIT_WEIGHT,
+    UNLOCAL_MATCH_REQUEST,
 )
 
 
@@ -325,6 +326,52 @@ def floor_min_duration(
 ) -> int:
     floor = int(duration * ratio)
     return max(raw_min_duration if raw_min_duration is not None else floor, floor)
+
+
+def keep_existing_match_ids(
+    match_ids: list[Any] | None,
+    known_prids: set[str],
+) -> list[str]:
+    """Keep only match IDs present in the patient set (plus unlocal placeholder)."""
+    kept: list[str] = []
+    seen: set[str] = set()
+    for mid in match_ids or []:
+        s = str(mid)
+        if s != UNLOCAL_MATCH_REQUEST and s not in known_prids:
+            continue
+        if s in seen:
+            continue
+        seen.add(s)
+        kept.append(s)
+    return kept
+
+
+def scrub_dangling_match_requests(
+    patients: dict[str, dict[str, Any]] | list[dict[str, Any]],
+) -> int:
+    """
+    Drop match_request / match_request_list entries whose prid is not in ``patients``.
+
+    Handles both flat builder records (``match_request``) and wire patients
+    (``request_window.match_request_list``). Mutates in place. Returns removals count.
+    """
+    values = list(patients.values()) if isinstance(patients, dict) else list(patients)
+    known = {str(p.get("prid")) for p in values if p.get("prid") is not None}
+    removed = 0
+    for patient in values:
+        flat = patient.get("match_request")
+        if flat is not None:
+            kept = keep_existing_match_ids(flat, known)
+            removed += len(list(flat or [])) - len(kept)
+            patient["match_request"] = kept if kept else None
+
+        rw = patient.get("request_window")
+        if isinstance(rw, dict) and "match_request_list" in rw:
+            before = list(rw.get("match_request_list") or [])
+            kept = keep_existing_match_ids(before, known)
+            removed += len(before) - len(kept)
+            rw["match_request_list"] = kept
+    return removed
 
 
 def build_match_request_components(

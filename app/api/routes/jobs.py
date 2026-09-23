@@ -104,7 +104,13 @@ def _local_status_payload(run: dict[str, Any], job_ref: str) -> dict[str, Any]:
     }
 
 
-def _to_response(body: dict[str, Any], fallback_job_id: str) -> EngineJobStatusResponse:
+def _to_response(
+    body: dict[str, Any],
+    fallback_job_id: str,
+    *,
+    raw: bool = False,
+    engine_job_id: str | None = None,
+) -> EngineJobStatusResponse:
     from app.services.payload.panel_result import normalize_schedule_result_for_panel
 
     progress_raw = body.get("progress_percent")
@@ -119,17 +125,22 @@ def _to_response(body: dict[str, Any], fallback_job_id: str) -> EngineJobStatusR
     if progress_message is not None:
         progress_message = str(progress_message)
 
+    result = body.get("result")
+    if not raw:
+        result = normalize_schedule_result_for_panel(result)
+
     return EngineJobStatusResponse(
         job_id=str(body.get("job_id") or fallback_job_id),
         job_type=body.get("job_type"),
         status=body.get("status"),
-        result=normalize_schedule_result_for_panel(body.get("result")),
+        result=result,
         error=body.get("error"),
         created_at=body.get("created_at"),
         started_at=body.get("started_at"),
         completed_at=body.get("completed_at"),
         progress_percent=progress_percent,
         progress_message=progress_message,
+        engine_job_id=engine_job_id or body.get("engine_job_id"),
     )
 
 
@@ -157,6 +168,13 @@ def _rewrite_upstream_frame(raw: str | bytes, bridge_token: str) -> str:
 )
 async def get_engine_job(
     job_id: str,
+    raw: bool = Query(
+        default=False,
+        description=(
+            "If true, return the engine Schedule result untouched "
+            "(no Panel id/alias normalization)."
+        ),
+    ),
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> EngineJobStatusResponse:
@@ -166,6 +184,9 @@ async def get_engine_job(
     `job_id` is the stable bridge token from the 202 accept response.
     Until the engine accepts the job, status is served from hhs_engine_runs;
     afterward it proxies engine-service (rewriting job_id back to the bridge token).
+
+    Pass `?raw=true` to get the pure engine `result` (string ids / `*_list` fields
+    as returned by engine-service, without Panel aliases).
     """
     run = get_run_by_job_ref(db, job_id)
     if run is None:
@@ -182,13 +203,18 @@ async def get_engine_job(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=str(exc),
             ) from exc
-        return _to_response(body, job_id)
+        return _to_response(body, job_id, raw=raw, engine_job_id=job_id)
 
     engine_job_id = run.get("engine_job_id")
     status_raw = (run.get("status") or "").upper()
 
     if status_raw == STATUS_FAILED or status_raw == STATUS_CANCELLED or not engine_job_id:
-        return _to_response(_local_status_payload(run, job_id), job_id)
+        return _to_response(
+            _local_status_payload(run, job_id),
+            job_id,
+            raw=raw,
+            engine_job_id=str(engine_job_id) if engine_job_id else None,
+        )
 
     try:
         body = await get_job(settings, str(engine_job_id))
@@ -207,7 +233,12 @@ async def get_engine_job(
     body = {**body, "job_id": str(run.get("token") or job_id)}
     if not body.get("job_type") and run.get("job_type"):
         body["job_type"] = run["job_type"]
-    return _to_response(body, job_id)
+    return _to_response(
+        body,
+        job_id,
+        raw=raw,
+        engine_job_id=str(engine_job_id),
+    )
 
 
 @router.post(
@@ -237,7 +268,13 @@ async def stop_engine_job(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
         ) from exc
-    return _to_response(body, job_id)
+    run = get_run_by_job_ref(db, job_id)
+    engine_job_id = None
+    if run and run.get("engine_job_id"):
+        engine_job_id = str(run["engine_job_id"])
+    elif isinstance(body, dict) and body.get("engine_job_id"):
+        engine_job_id = str(body["engine_job_id"])
+    return _to_response(body, job_id, engine_job_id=engine_job_id)
 
 
 @router.get(

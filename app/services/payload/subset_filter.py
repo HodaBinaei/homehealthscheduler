@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import date
 from typing import TYPE_CHECKING, Any, Iterable
 
+from app.services.payload.window_helpers import scrub_dangling_match_requests
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
-
 
 def _as_int_set(values: Iterable[Any]) -> set[int]:
     return {int(v) for v in values}
@@ -146,6 +147,9 @@ def filter_day_bundle_by_selection(
     location_ids = {str(cg["cid"]) for cg in caregivers.values()} | {
         str(pt["pid"]) for pt in patients.values()
     }
+
+    # Multicpsat selection can drop one half of a double-up; strip dangling refs.
+    scrub_dangling_match_requests(patients)
 
     return {
         **bundle,

@@ -102,6 +102,14 @@ curl http://localhost:8000/api-data/v1/schedule/runs/<job_id> \
   -H "X-API-Key: change-me-to-a-long-secret"
 ```
 
+Runs include `engine_job_id`, `job_type`, and counts (`caregiver_count`,
+`patient_count`, `feasible_count`). Poll the pure engine Schedule with:
+
+```bash
+curl "http://localhost:8000/api-data/v1/jobs/<job_id>?raw=true" \
+  -H "X-API-Key: change-me-to-a-long-secret"
+```
+
 ### Download payload from S3
 
 ```bash

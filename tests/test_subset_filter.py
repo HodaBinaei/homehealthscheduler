@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.services.payload.subset_filter import filter_day_bundle_by_selection
+from app.services.payload.window_helpers import scrub_dangling_match_requests
 
 
 def _bundle() -> dict:
@@ -66,3 +67,47 @@ def test_filter_rejects_no_matches():
         filter_day_bundle_by_selection(
             _bundle(), provider_user_ids=[10], prids=[999]
         )
+
+
+def test_filter_strips_dangling_match_request_list():
+    bundle = _bundle()
+    bundle["patients"]["1"] = {
+        **bundle["patients"]["1"],
+        "request_window": {"match_request_list": ["101", "999"]},
+    }
+    bundle["patients"]["2"] = {
+        **bundle["patients"]["2"],
+        "request_window": {"match_request_list": ["100"]},
+    }
+    out = filter_day_bundle_by_selection(
+        bundle, provider_user_ids=[10], prids=[100]
+    )
+    assert out["patients"]["1"]["request_window"]["match_request_list"] == []
+
+
+def test_scrub_keeps_reciprocal_and_unlocal_placeholder():
+    patients = {
+        "1": {
+            "prid": "459",
+            "match_request": [460, "unlocal_match_request"],
+            "request_window": {"match_request_list": ["460", "unlocal_match_request"]},
+        },
+        "2": {
+            "prid": "460",
+            "match_request": [459],
+            "request_window": {"match_request_list": ["459"]},
+        },
+    }
+    assert scrub_dangling_match_requests(patients) == 0
+    assert patients["1"]["request_window"]["match_request_list"] == [
+        "460",
+        "unlocal_match_request",
+    ]
+
+    del patients["2"]
+    removed = scrub_dangling_match_requests(patients)
+    assert removed == 2  # flat + wire each lost 460
+    assert patients["1"]["match_request"] == ["unlocal_match_request"]
+    assert patients["1"]["request_window"]["match_request_list"] == [
+        "unlocal_match_request"
+    ]

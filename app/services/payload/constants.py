@@ -14,6 +14,8 @@ DEFAULT_SOFT_WINDOW_VIOLATION_LEVEL = 0.5
 DEFAULT_CAREGIVER_USAGE_PRIORITY = 0.5
 MUST_SOURCE_COORDINATOR = "coordinator"
 MUST_SOURCE_HISTORICAL = "historical"
+# Engine accepts this placeholder when the double-up partner is outside the payload.
+UNLOCAL_MATCH_REQUEST = "unlocal_match_request"
 CLIENT_EXPORT_END_OF_DAY_EXTEND_THRESHOLD = 1439  # 24*60 - 1
 MINUTES_IN_DAY = 1440
 DURATION_MINIMUM = 15

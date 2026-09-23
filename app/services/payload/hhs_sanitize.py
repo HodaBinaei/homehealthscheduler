@@ -25,6 +25,7 @@ from app.services.payload.travel_bounds import (
     clamp_travel_minutes,
     coerce_travel_minutes,
 )
+from app.services.payload.window_helpers import scrub_dangling_match_requests
 
 logger = logging.getLogger("hhs.sanitize")
 
@@ -290,6 +291,12 @@ def sanitize_engine_request(body: dict[str, Any]) -> dict[str, Any]:
     caregivers = [
         sanitize_caregiver(c) for c in (out.get("caregiver_dict") or []) if isinstance(c, dict)
     ]
+    removed_matches = scrub_dangling_match_requests(patients)
+    if removed_matches:
+        logger.info(
+            "Removed %s dangling match_request_list entries not present in patient_dict",
+            removed_matches,
+        )
     out["patient_dict"] = patients
     out["caregiver_dict"] = caregivers
     out["crid_prid_feasible_dict"] = sanitize_feasible_pairs(out.get("crid_prid_feasible_dict"))

@@ -41,7 +41,8 @@ Payload build, S3 upload, and engine submit run in the background.
   "started_at": "...",
   "completed_at": "...",
   "progress_percent": 0,
-  "progress_message": "queued"
+  "progress_message": "queued",
+  "engine_job_id": "..."
 }
 ```
 
@@ -49,6 +50,16 @@ Payload build, S3 upload, and engine submit run in the background.
 solver logs stream, 90% while finalizing, **100% when `status=completed`**.
 May be `null` on older workers. Panel maps `completed` → SUCCESS + ready so
 roster ingest can run once the result payload is present.
+
+### Pure engine result
+
+`GET /api-data/v1/jobs/{job_id}?raw=true` — same shape, but `result` is the
+**untouched** Schedule from engine-service (string ids, `*_list` field names,
+no Panel aliases). Use this for debugging / comparing against engine-service
+directly. Default (`raw=false`) still normalizes for Panel ingest.
+
+`engine_job_id` is the upstream engine-service id (also on
+`GET /api-data/v1/schedule/runs/{job_id}`).
 
 ## Stop job
 
@@ -67,6 +78,9 @@ When `result` is a Schedule payload, the bridge also normalizes it for Panel:
   - `assigned_prids` ↔ `assigned_prid_list`
   - `unassigned_prids` ↔ `unassigned_prid_list`
   - `removed_caregivers` ↔ `removed_crid_list`
+- **Backfills** `assigned_prid_list` / `assigned_crid_list` from
+  `caregiver_schedules[].visits` when multicpsat returns visits but leaves those
+  lists empty (otherwise Panel projects 0 visits).
 
 ### PRID / CRID contract
 

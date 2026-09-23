@@ -70,11 +70,14 @@ class EngineRunItem(BaseModel):
     hour: int | None = None
     status: str
     error: str | None = None
+    job_type: str | None = None
+    engine_job_id: str | None = None
     caregiver_count: int | None = None
     patient_count: int | None = None
     feasible_count: int | None = None
     request_payload_s3_key: str | None = None
     created_at: datetime | str
+    updated_at: datetime | str | None = None
 
 
 class EngineRunsResponse(BaseModel):
@@ -102,3 +105,5 @@ class EngineJobStatusResponse(BaseModel):
     completed_at: str | None = None
     progress_percent: int | None = None
     progress_message: str | None = None
+    # Upstream engine-service job id (when submit has finished). Useful with ?raw=true.
+    engine_job_id: str | None = None

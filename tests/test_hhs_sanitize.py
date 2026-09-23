@@ -112,3 +112,45 @@ def test_full_assignment_payload_passes_hhs_distances():
     # sanitize_engine_request is idempotent
     again = sanitize_engine_request(body)
     assert again["driving_data"]["distances"]["10_20"]["distance_minute"] == 600
+
+
+def test_sanitize_strips_dangling_match_request_like_engine_459_460():
+    """Engine: Match request ID 460 for patient 459 does not exist in patients list."""
+    body = {
+        "patient_dict": [
+            {
+                "pid": "20",
+                "prid": "459",
+                "gender": "female",
+                "gender_preference": 3,
+                "location_id": "20",
+                "location": {"latitude": 53.3, "longitude": -6.2, "postcode": None},
+                "request_window": {
+                    "start_time_hard": 540,
+                    "end_time_hard": 720,
+                    "start_time_soft": 540,
+                    "end_time_soft": 660,
+                    "duration": 60,
+                    "min_duration": 45,
+                    "duration_reduction_priority": 1.0,
+                    "request_window_priority": 1.0,
+                    "soft_window_violation_level": 1.0,
+                    "match_request_list": ["460"],
+                },
+                "extend_feasibility": {
+                    "extend": False,
+                    "max_distance_km": 5.0,
+                    "max_time_minutes": 20,
+                    "max_distance_border_crossings_km": 10,
+                    "max_time_border_crossings_minutes": 60,
+                },
+            }
+        ],
+        "caregiver_dict": [],
+        "crid_prid_feasible_dict": [],
+        "walking_data": {"distances": {}},
+        "cycling_data": {"distances": {}},
+        "driving_data": {"distances": {}},
+    }
+    out = sanitize_engine_request(body)
+    assert out["patient_dict"][0]["request_window"]["match_request_list"] == []

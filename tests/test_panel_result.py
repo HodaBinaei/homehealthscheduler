@@ -54,3 +54,48 @@ def test_normalize_nested_result_wrapper():
 def test_normalize_passthrough_non_schedule():
     assert normalize_schedule_result_for_panel(None) is None
     assert normalize_schedule_result_for_panel({"ok": True}) == {"ok": True}
+
+
+def test_normalize_backfills_assigned_lists_from_schedules():
+    """multicpsat bug: visits present but assigned_*_list empty → Panel projects 0."""
+    raw = {
+        "date": "-",
+        "assigned_crid_list": [],
+        "assigned_prid_list": [],
+        "unassigned_prid_list": [],
+        "unassigned_crid_list": [],
+        "removed_prid_list": [],
+        "removed_crid_list": [],
+        "caregiver_schedules": {
+            "16": {
+                "cid": "20260922000104",
+                "crid": "16",
+                "visits": [
+                    {
+                        "prid": "398",
+                        "start_time": 908,
+                        "end_time": 968,
+                        "duration": 60,
+                        "crid": "16",
+                        "travel_time": 10,
+                        "waiting_time": 0,
+                    }
+                ],
+            },
+            "18": {
+                "cid": "20260922000109",
+                "crid": "18",
+                "visits": [],
+            },
+        },
+    }
+
+    out = normalize_schedule_result_for_panel(raw)
+
+    assert out["assigned_prids"] == [398]
+    assert out["assigned_prid_list"] == ["398"]
+    assert out["assigned_crids"] == [16]
+    assert out["assigned_crid_list"] == ["16"]
+    assert out["caregiver_schedules"]["16"]["cid"] == 20260922000104
+    assert out["caregiver_schedules"]["16"]["visits"][0]["prid"] == 398
+
