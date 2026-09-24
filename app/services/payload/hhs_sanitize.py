@@ -68,6 +68,10 @@ def _sanitize_extend_feasibility(ef: dict[str, Any] | None) -> dict[str, Any]:
 
 def _sanitize_request_window(rw: dict[str, Any] | None) -> dict[str, Any]:
     src = dict(rw or {})
+    match_list = list(src.get("match_request_list") or [])
+    # hhs.RequestWindow: 15 min hard↔soft slack normally; 5 when double-up matched.
+    margin = 5 if match_list else 15
+
     hard_start = _clamp_int(
         src.get("start_time_hard", 0),
         PATIENT_EARLEST_REQUEST_TIME,
@@ -116,6 +120,31 @@ def _sanitize_request_window(rw: dict[str, Any] | None) -> dict[str, Any]:
     if soft_end - soft_start < duration:
         soft_start = max(PATIENT_EARLEST_REQUEST_TIME, soft_end - duration)
 
+    # Expand hard window so soft sits at least `margin` inside it.
+    if soft_start - hard_start < margin:
+        hard_start = soft_start - margin
+    if hard_end - soft_end < margin:
+        hard_end = soft_end + margin
+
+    # Day bounds: if hard cannot expand, push soft inward instead.
+    if hard_start < PATIENT_EARLEST_REQUEST_TIME:
+        hard_start = PATIENT_EARLEST_REQUEST_TIME
+        soft_start = max(soft_start, hard_start + margin)
+    if hard_end > PATIENT_LATEST_REQUEST_TIME:
+        hard_end = PATIENT_LATEST_REQUEST_TIME
+        soft_end = min(soft_end, hard_end - margin)
+
+    # Soft must still fit duration after bound adjustments.
+    if soft_end - soft_start < duration:
+        soft_end = min(hard_end - margin, soft_start + duration)
+    if soft_end - soft_start < duration:
+        soft_start = max(hard_start + margin, soft_end - duration)
+    # Final hard expansion if soft moved.
+    if soft_start - hard_start < margin:
+        hard_start = max(PATIENT_EARLEST_REQUEST_TIME, soft_start - margin)
+    if hard_end - soft_end < margin:
+        hard_end = min(PATIENT_LATEST_REQUEST_TIME, soft_end + margin)
+
     return {
         **src,
         "start_time_hard": hard_start,
@@ -133,7 +162,7 @@ def _sanitize_request_window(rw: dict[str, Any] | None) -> dict[str, Any]:
         "soft_window_violation_level": _clamp_float(
             src.get("soft_window_violation_level", 0.5), 0.0, 1.0, 0.5
         ),
-        "match_request_list": list(src.get("match_request_list") or []),
+        "match_request_list": match_list,
     }
 
 
@@ -297,6 +326,9 @@ def sanitize_engine_request(body: dict[str, Any]) -> dict[str, Any]:
             "Removed %s dangling match_request_list entries not present in patient_dict",
             removed_matches,
         )
+        # Clearing matches raises the hard↔soft margin from 5 → 15; re-apply windows.
+        for p in patients:
+            p["request_window"] = _sanitize_request_window(p.get("request_window"))
     out["patient_dict"] = patients
     out["caregiver_dict"] = caregivers
     out["crid_prid_feasible_dict"] = sanitize_feasible_pairs(out.get("crid_prid_feasible_dict"))
